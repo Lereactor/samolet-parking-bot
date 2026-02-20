@@ -26,6 +26,14 @@ class AddSpotState(StatesGroup):
     waiting_for_spot = State()
 
 
+class RemoveSpotState(StatesGroup):
+    waiting_for_spot = State()
+
+
+class AdminSpotState(StatesGroup):
+    waiting_for_action = State()
+
+
 class BackupState(StatesGroup):
     waiting_for_file = State()
 
@@ -40,7 +48,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=MENU_BUTTONS["directory"]),
              KeyboardButton(text=MENU_BUTTONS["my_spot"])],
             [KeyboardButton(text=MENU_BUTTONS["add_spot"]),
-             KeyboardButton(text=MENU_BUTTONS["help"])],
+             KeyboardButton(text=MENU_BUTTONS["remove_spot"])],
+            [KeyboardButton(text=MENU_BUTTONS["help"])],
         ],
         resize_keyboard=True,
     )
@@ -544,3 +553,110 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_admin: boo
         )
 
     await state.clear()
+
+
+# === Remove spot (for approved users) ===
+
+@router.message(F.text == MENU_BUTTONS["remove_spot"])
+async def remove_spot_start(message: Message, state: FSMContext, db, is_approved: bool, **kwargs):
+    if not is_approved:
+        await message.answer("Вы не зарегистрированы. Используйте /start")
+        return
+
+    spots = await db.get_user_spots(message.from_user.id)
+    if not spots:
+        await message.answer("У вас нет зарегистрированных мест.")
+        return
+
+    spots_text = ", ".join(str(s["spot_number"]) for s in spots)
+    await message.answer(
+        f"Ваши места: {spots_text}\n\n"
+        f"Введите номер места, которое хотите удалить:"
+    )
+    await state.set_state(RemoveSpotState.waiting_for_spot)
+
+
+@router.message(RemoveSpotState.waiting_for_spot)
+async def remove_spot_number(message: Message, state: FSMContext, db, **kwargs):
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("Введите номер места как число:")
+        return
+
+    spot_number = int(text)
+    removed = await db.remove_spot(spot_number, message.from_user.id)
+
+    if removed:
+        spots = await db.get_user_spots(message.from_user.id)
+        spots_text = ", ".join(str(s["spot_number"]) for s in spots) if spots else "нет мест"
+        await message.answer(f"✅ Место {spot_number} удалено.\nВаши места: {spots_text}")
+    else:
+        await message.answer(f"Место {spot_number} не принадлежит вам.")
+
+    await state.clear()
+
+
+# === Admin: manage spots for any user ===
+
+@router.message(Command("spot"))
+async def cmd_admin_spot(message: Message, state: FSMContext, db, is_admin: bool, **kwargs):
+    """Admin command: /spot add 142 228501005 or /spot remove 142"""
+    if not is_admin:
+        return
+
+    parts = message.text.strip().split()
+    # /spot add <number> <user_id> — assign spot to user
+    # /spot remove <number> — free spot from whoever owns it
+    # /spot — show help
+
+    if len(parts) < 2:
+        await message.answer(
+            "👑 <b>Управление местами</b>\n\n"
+            "<code>/spot add НомерМеста UserID</code> — назначить место\n"
+            "<code>/spot remove НомерМеста</code> — освободить место\n"
+            "<code>/spot info НомерМеста</code> — инфо о месте",
+            parse_mode="HTML",
+        )
+        return
+
+    action = parts[1].lower()
+
+    if action == "add" and len(parts) >= 4:
+        spot_number = int(parts[2])
+        user_id = int(parts[3])
+
+        user = await db.get_user(user_id)
+        if not user:
+            await message.answer(f"Пользователь {user_id} не найден.")
+            return
+
+        success = await db.add_spot(spot_number, user_id)
+        if success:
+            await message.answer(f"✅ Место {spot_number} назначено {user['name']} ({user_id})")
+        else:
+            await message.answer(f"⚠️ Место {spot_number} уже занято.")
+
+    elif action == "remove" and len(parts) >= 3:
+        spot_number = int(parts[2])
+        spot = await db.get_spot(spot_number)
+        if not spot:
+            await message.answer(f"Место {spot_number} не зарегистрировано.")
+            return
+
+        await db.force_remove_spot(spot_number)
+        await message.answer(f"✅ Место {spot_number} освобождено.")
+
+    elif action == "info" and len(parts) >= 3:
+        spot_number = int(parts[2])
+        owner = await db.get_spot_owner(spot_number)
+        if owner:
+            await message.answer(
+                f"Место {spot_number}: {owner['name']} (@{owner['username'] or '—'})\n"
+                f"ID: <code>{owner['telegram_id']}</code>",
+                parse_mode="HTML",
+            )
+        else:
+            await message.answer(f"Место {spot_number} свободно.")
+
+    else:
+        await message.answer("Неверный формат. Используйте /spot для справки.")

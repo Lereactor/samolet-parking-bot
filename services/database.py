@@ -165,6 +165,15 @@ class Database:
             )
             return result != "DELETE 0"
 
+    async def force_remove_spot(self, spot_number: int) -> bool:
+        """Admin: remove spot regardless of owner."""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM parking_spots WHERE spot_number = $1",
+                spot_number,
+            )
+            return result != "DELETE 0"
+
     async def set_spot_free(
         self, spot_number: int, is_free: bool, free_until=None
     ) -> None:

@@ -359,6 +359,6 @@ async def show_help(message: Message, is_approved: bool, **kwargs):
         f"<b>{MENU_BUTTONS['my_spot']}</b> — информация о вашем месте\n\n"
         "<b>В группе:</b>\n"
         "Напишите @имя_бота и номер места — владельцу придёт уведомление.\n"
-        "Пример: <code>@parking_bot 142 перегородили выезд</code>",
+        "Пример: <code>@Samolet_parking_bot 142 перегородили выезд</code>",
         parse_mode="HTML",
     )
