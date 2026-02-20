@@ -24,6 +24,7 @@ class SOSState(StatesGroup):
 
 
 class AwayState(StatesGroup):
+    selecting_spot = State()
     waiting_for_duration = State()
 
 
@@ -195,22 +196,61 @@ async def away_toggle(message: Message, state: FSMContext, db, is_approved: bool
         await message.answer("У вас нет зарегистрированных мест.")
         return
 
-    # If user has one spot, toggle directly
-    spot = spots[0]
+    if len(spots) == 1:
+        # Single spot — toggle directly
+        spot = spots[0]
+        if spot["is_temporary_free"]:
+            await db.set_spot_free(spot["spot_number"], False)
+            await message.answer(
+                f"🔵 Место <b>{spot['spot_number']}</b> отмечено как <b>занято</b>. С возвращением!",
+                parse_mode="HTML",
+            )
+        else:
+            await message.answer(
+                f"На сколько часов вы уезжаете? (число от 1 до 720)\n"
+                f"Или отправьте 0, чтобы не указывать время.",
+            )
+            await state.update_data(spot_number=spot["spot_number"])
+            await state.set_state(AwayState.waiting_for_duration)
+    else:
+        # Multiple spots — ask which one
+        lines = ["Выберите место (введите номер):\n"]
+        for s in spots:
+            status = "🟢 свободно" if s["is_temporary_free"] else "🔵 занято"
+            lines.append(f"  {s['spot_number']} — {status}")
+        await message.answer("\n".join(lines))
+        await state.set_state(AwayState.selecting_spot)
+
+
+@router.message(AwayState.selecting_spot)
+async def away_select_spot(message: Message, state: FSMContext, db, **kwargs):
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("Введите номер места:")
+        return
+
+    spot_number = int(text)
+    spots = await db.get_user_spots(message.from_user.id)
+    user_spot_nums = [s["spot_number"] for s in spots]
+
+    if spot_number not in user_spot_nums:
+        await message.answer(f"Это не ваше место. Ваши: {', '.join(str(n) for n in user_spot_nums)}")
+        return
+
+    spot = next(s for s in spots if s["spot_number"] == spot_number)
     if spot["is_temporary_free"]:
-        # Coming back
-        await db.set_spot_free(spot["spot_number"], False)
+        await db.set_spot_free(spot_number, False)
         await message.answer(
-            f"🔵 Место <b>{spot['spot_number']}</b> отмечено как <b>занято</b>. С возвращением!",
+            f"🔵 Место <b>{spot_number}</b> отмечено как <b>занято</b>. С возвращением!",
             parse_mode="HTML",
         )
+        await state.clear()
     else:
-        # Going away
         await message.answer(
             f"На сколько часов вы уезжаете? (число от 1 до 720)\n"
             f"Или отправьте 0, чтобы не указывать время.",
         )
-        await state.update_data(spot_number=spot["spot_number"])
+        await state.update_data(spot_number=spot_number)
         await state.set_state(AwayState.waiting_for_duration)
 
 

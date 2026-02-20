@@ -46,7 +46,7 @@ async def announce_text(message: Message, state: FSMContext, db, is_admin: bool,
         try:
             await bot.send_message(
                 user["telegram_id"],
-                f"📢 <b>Объявление от управляющей</b>\n\n{text}",
+                f"📢 <b>Объявление</b>\n\n{text}",
                 parse_mode="HTML",
             )
             sent += 1

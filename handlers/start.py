@@ -22,6 +22,10 @@ class RegistrationState(StatesGroup):
     waiting_for_spot = State()
 
 
+class AddSpotState(StatesGroup):
+    waiting_for_spot = State()
+
+
 class BackupState(StatesGroup):
     waiting_for_file = State()
 
@@ -35,7 +39,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
              KeyboardButton(text=MENU_BUTTONS["guest"])],
             [KeyboardButton(text=MENU_BUTTONS["directory"]),
              KeyboardButton(text=MENU_BUTTONS["my_spot"])],
-            [KeyboardButton(text=MENU_BUTTONS["help"])],
+            [KeyboardButton(text=MENU_BUTTONS["add_spot"]),
+             KeyboardButton(text=MENU_BUTTONS["help"])],
         ],
         resize_keyboard=True,
     )
@@ -47,25 +52,21 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, user_status: str, **kwargs):
     await state.clear()
 
-    if is_admin and user_status == "new":
-        await db.add_user(message.from_user.id, message.from_user.username, "Админ")
-        await db.set_user_status(message.from_user.id, "approved")
-        await message.answer(
-            "👑 Вы зарегистрированы как администратор.\n\n"
-            "Команды:\n"
-            "/pending — заявки на одобрение\n"
-            "/users — все пользователи\n"
-            "/stats — статистика\n"
-            "/announce — объявление\n"
-            "/backup — экспорт БД\n"
-            "/restore — импорт БД",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
     if user_status == "approved":
+        admin_hint = ""
+        if is_admin:
+            admin_hint = (
+                "\n\n👑 <b>Админ-команды:</b>\n"
+                "/pending — заявки на одобрение\n"
+                "/users — все пользователи\n"
+                "/stats — статистика\n"
+                "/announce — объявление\n"
+                "/backup — экспорт БД\n"
+                "/restore — импорт БД"
+            )
         await message.answer(
-            "Вы уже зарегистрированы! Используйте меню ниже.",
+            f"Вы уже зарегистрированы! Используйте меню ниже.{admin_hint}",
+            parse_mode="HTML",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -100,18 +101,93 @@ async def registration_name(message: Message, state: FSMContext, **kwargs):
         await message.answer("Имя должно быть от 2 до 50 символов. Попробуйте ещё:")
         return
 
-    await state.update_data(name=name)
+    await state.update_data(name=name, spots=[])
     await message.answer(
-        f"Отлично, {name}! Теперь введите номер вашего парковочного места (число):"
+        f"Отлично, {name}! Введите номер парковочного места (число).\n"
+        f"Можно добавить несколько — вводите по одному.\n"
+        f"Когда закончите, отправьте <b>готово</b>.",
+        parse_mode="HTML",
     )
     await state.set_state(RegistrationState.waiting_for_spot)
 
 
 @router.message(RegistrationState.waiting_for_spot)
-async def registration_spot(message: Message, state: FSMContext, db, **kwargs):
-    text = message.text.strip()
+async def registration_spot(message: Message, state: FSMContext, db, is_admin: bool, **kwargs):
+    text = message.text.strip().lower()
+
+    # Finish adding spots
+    if text in ("готово", "done", "всё", "все"):
+        data = await state.get_data()
+        name = data["name"]
+        spots = data.get("spots", [])
+
+        if not spots:
+            await message.answer("Вы не добавили ни одного места. Введите номер места:")
+            return
+
+        # Save user
+        await db.add_user(message.from_user.id, message.from_user.username, name)
+
+        spots_text = ", ".join(str(s) for s in spots)
+
+        if is_admin:
+            # Auto-approve admin
+            await db.set_user_status(message.from_user.id, "approved")
+            for spot_number in spots:
+                await db.add_spot(spot_number, message.from_user.id)
+            await state.clear()
+            await message.answer(
+                f"👑 Вы зарегистрированы как администратор!\n\n"
+                f"Имя: {name}\n"
+                f"Места: {spots_text}\n\n"
+                f"Админ-команды:\n"
+                f"/pending — заявки\n"
+                f"/users — пользователи\n"
+                f"/stats — статистика\n"
+                f"/announce — объявление\n"
+                f"/backup — экспорт БД\n"
+                f"/restore — импорт БД",
+                reply_markup=main_menu_keyboard(),
+            )
+        else:
+            await state.clear()
+            await message.answer(
+                f"✅ Заявка отправлена!\n\n"
+                f"Имя: {name}\n"
+                f"Места: {spots_text}\n\n"
+                f"Ожидайте одобрения администратором."
+            )
+            # Notify admin
+            bot: Bot = message.bot
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"📋 <b>Новая заявка</b>\n\n"
+                    f"Имя: {name}\n"
+                    f"Места: {spots_text}\n"
+                    f"Username: @{message.from_user.username or 'нет'}\n"
+                    f"ID: <code>{message.from_user.id}</code>",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Одобрить",
+                                callback_data=f"approvemulti_{message.from_user.id}",
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ Отклонить",
+                                callback_data=f"reject_{message.from_user.id}",
+                            ),
+                        ]
+                    ]),
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify admin: {e}")
+        return
+
+    # Add a spot number
     if not text.isdigit():
-        await message.answer("Введите номер места как число (например: 142):")
+        await message.answer("Введите номер места как число (например: 142) или <b>готово</b>:", parse_mode="HTML")
         return
 
     spot_number = int(text)
@@ -119,94 +195,121 @@ async def registration_spot(message: Message, state: FSMContext, db, **kwargs):
         await message.answer("Номер места должен быть от 1 до 9999:")
         return
 
-    data = await state.get_data()
-    name = data["name"]
-
-    # Check if spot is already taken
     existing = await db.get_spot(spot_number)
     if existing:
         await message.answer(
             f"Место {spot_number} уже зарегистрировано за другим пользователем.\n"
-            "Введите другой номер или обратитесь к администратору:"
+            "Введите другой номер:"
         )
         return
 
-    # Save user and spot request
-    await db.add_user(
-        message.from_user.id, message.from_user.username, name
-    )
-    await state.update_data(spot_number=spot_number)
-    await state.clear()
+    data = await state.get_data()
+    spots = data.get("spots", [])
+    if spot_number in spots:
+        await message.answer(f"Место {spot_number} уже в вашем списке. Введите другой номер или <b>готово</b>:", parse_mode="HTML")
+        return
 
+    spots.append(spot_number)
+    await state.update_data(spots=spots)
     await message.answer(
-        f"✅ Заявка отправлена!\n\n"
-        f"Имя: {name}\n"
-        f"Место: {spot_number}\n\n"
-        f"Ожидайте одобрения администратором."
+        f"✅ Место {spot_number} добавлено. Ваши места: {', '.join(str(s) for s in spots)}\n\n"
+        f"Введите ещё номер или отправьте <b>готово</b>.",
+        parse_mode="HTML",
     )
-
-    # Notify admin
-    bot: Bot = message.bot
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            f"📋 <b>Новая заявка</b>\n\n"
-            f"Имя: {name}\n"
-            f"Место: {spot_number}\n"
-            f"Username: @{message.from_user.username or 'нет'}\n"
-            f"ID: <code>{message.from_user.id}</code>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✅ Одобрить",
-                        callback_data=f"approve_{message.from_user.id}_{spot_number}",
-                    ),
-                    InlineKeyboardButton(
-                        text="❌ Отклонить",
-                        callback_data=f"reject_{message.from_user.id}",
-                    ),
-                ]
-            ]),
-        )
-    except Exception as e:
-        logger.error(f"Failed to notify admin: {e}")
 
 
 # === Admin: approve/reject ===
 
+@router.callback_query(F.data.startswith("approvemulti_"))
+async def approve_user_multi(callback: CallbackQuery, db, is_admin: bool, **kwargs):
+    """Approve user and assign all their pending spots."""
+    if not is_admin:
+        await callback.answer("Только для администратора", show_alert=True)
+        return
+
+    user_id = int(callback.data.split("_")[1])
+
+    # Parse spot numbers from the message text
+    import re
+    msg_text = callback.message.text or ""
+    spots_match = re.search(r"Места?:\s*([\d,\s]+)", msg_text)
+    spot_numbers = []
+    if spots_match:
+        spot_numbers = [int(n.strip()) for n in spots_match.group(1).split(",") if n.strip().isdigit()]
+
+    await db.set_user_status(user_id, "approved")
+
+    assigned = []
+    failed = []
+    for spot_number in spot_numbers:
+        success = await db.add_spot(spot_number, user_id)
+        if success:
+            assigned.append(str(spot_number))
+        else:
+            failed.append(str(spot_number))
+
+    result = f"\n\n✅ Одобрено! Места: {', '.join(assigned)}"
+    if failed:
+        result += f"\n⚠️ Уже заняты: {', '.join(failed)}"
+
+    await callback.message.edit_text(
+        msg_text + result,
+        parse_mode="HTML",
+    )
+
+    # Notify user
+    try:
+        bot: Bot = callback.bot
+        spots_text = ", ".join(assigned) if assigned else "не назначены"
+        await bot.send_message(
+            user_id,
+            f"🎉 Ваша заявка одобрена!\n"
+            f"Места: {spots_text}\n\n"
+            f"Используйте меню для управления парковкой.",
+            reply_markup=main_menu_keyboard(),
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify user {user_id}: {e}")
+
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("approve_"))
 async def approve_user(callback: CallbackQuery, db, is_admin: bool, **kwargs):
+    """Legacy single-spot approve (from /pending)."""
     if not is_admin:
         await callback.answer("Только для администратора", show_alert=True)
         return
 
     parts = callback.data.split("_")
     user_id = int(parts[1])
-    spot_number = int(parts[2])
+    spot_number = int(parts[2]) if len(parts) > 2 else 0
 
     await db.set_user_status(user_id, "approved")
-    success = await db.add_spot(spot_number, user_id)
 
-    if not success:
-        # Spot was taken in the meantime
-        await callback.message.edit_text(
-            callback.message.text + "\n\n⚠️ Место уже занято! Пользователь одобрен, но место не назначено.",
-            parse_mode="HTML",
-        )
+    if spot_number > 0:
+        success = await db.add_spot(spot_number, user_id)
+        if not success:
+            await callback.message.edit_text(
+                callback.message.text + "\n\n⚠️ Место уже занято! Пользователь одобрен, но место не назначено.",
+                parse_mode="HTML",
+            )
+        else:
+            await callback.message.edit_text(
+                callback.message.text + "\n\n✅ Одобрено!",
+                parse_mode="HTML",
+            )
     else:
         await callback.message.edit_text(
-            callback.message.text + "\n\n✅ Одобрено!",
+            callback.message.text + "\n\n✅ Одобрено (без места).",
             parse_mode="HTML",
         )
 
-    # Notify user
     try:
         bot: Bot = callback.bot
         await bot.send_message(
             user_id,
             f"🎉 Ваша заявка одобрена!\n"
-            f"Место {spot_number} закреплено за вами.\n\n"
             f"Используйте меню для управления парковкой.",
             reply_markup=main_menu_keyboard(),
         )
@@ -370,3 +473,74 @@ async def ban_user(callback: CallbackQuery, db, is_admin: bool, **kwargs):
         parse_mode="HTML",
     )
     await callback.answer()
+
+
+# === Add spot (for approved users) ===
+
+@router.message(F.text == MENU_BUTTONS["add_spot"])
+async def add_spot_start(message: Message, state: FSMContext, is_approved: bool, **kwargs):
+    if not is_approved:
+        await message.answer("Вы не зарегистрированы. Используйте /start")
+        return
+
+    await message.answer("Введите номер нового парковочного места:")
+    await state.set_state(AddSpotState.waiting_for_spot)
+
+
+@router.message(AddSpotState.waiting_for_spot)
+async def add_spot_number(message: Message, state: FSMContext, db, is_admin: bool, **kwargs):
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("Введите номер места как число:")
+        return
+
+    spot_number = int(text)
+    if spot_number < 1 or spot_number > 9999:
+        await message.answer("Номер места должен быть от 1 до 9999:")
+        return
+
+    existing = await db.get_spot(spot_number)
+    if existing:
+        await message.answer(f"Место {spot_number} уже занято.")
+        await state.clear()
+        return
+
+    if is_admin:
+        # Admin can add spots directly
+        await db.add_spot(spot_number, message.from_user.id)
+        spots = await db.get_user_spots(message.from_user.id)
+        spots_text = ", ".join(str(s["spot_number"]) for s in spots)
+        await message.answer(
+            f"✅ Место {spot_number} добавлено!\nВаши места: {spots_text}"
+        )
+    else:
+        # Regular user — needs admin approval
+        bot: Bot = message.bot
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"📋 <b>Запрос на доп. место</b>\n\n"
+                f"Пользователь: {message.from_user.full_name}\n"
+                f"Место: {spot_number}\n"
+                f"ID: <code>{message.from_user.id}</code>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ Одобрить",
+                            callback_data=f"approve_{message.from_user.id}_{spot_number}",
+                        ),
+                        InlineKeyboardButton(
+                            text="❌ Отклонить",
+                            callback_data=f"reject_{message.from_user.id}",
+                        ),
+                    ]
+                ]),
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify admin: {e}")
+        await message.answer(
+            f"Запрос на место {spot_number} отправлен администратору. Ожидайте."
+        )
+
+    await state.clear()
