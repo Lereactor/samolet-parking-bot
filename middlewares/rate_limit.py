@@ -23,6 +23,9 @@ class RateLimitMiddleware(BaseMiddleware):
         if not isinstance(event, Message):
             return await handler(event, data)
 
+        if not event.from_user:
+            return await handler(event, data)
+
         user_id = event.from_user.id
         now = time.time()
 
