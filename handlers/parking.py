@@ -11,6 +11,8 @@ from aiogram.types import (
 
 from config import MENU_BUTTONS, SOURCE_BLOCKED, SOURCE_SOS
 
+UK_PHONE = "+78007752411"
+
 logger = logging.getLogger(__name__)
 router = Router()
 
@@ -343,6 +345,17 @@ async def directory_lookup(message: Message, state: FSMContext, db, **kwargs):
         )
 
     await state.clear()
+
+
+# === Contact UK ===
+
+@router.message(F.text == MENU_BUTTONS["contact_uk"])
+async def contact_uk(message: Message, **kwargs):
+    await message.answer(
+        f"📞 <b>Управляющая компания</b>\n\n"
+        f"Телефон: {UK_PHONE}",
+        parse_mode="HTML",
+    )
 
 
 # === Help ===

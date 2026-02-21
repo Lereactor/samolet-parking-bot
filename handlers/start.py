@@ -49,7 +49,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
              KeyboardButton(text=MENU_BUTTONS["my_spot"])],
             [KeyboardButton(text=MENU_BUTTONS["add_spot"]),
              KeyboardButton(text=MENU_BUTTONS["remove_spot"])],
-            [KeyboardButton(text=MENU_BUTTONS["help"])],
+            [KeyboardButton(text=MENU_BUTTONS["contact_uk"]),
+             KeyboardButton(text=MENU_BUTTONS["help"])],
         ],
         resize_keyboard=True,
     )
