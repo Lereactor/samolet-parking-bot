@@ -11,7 +11,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile,
 )
 
-from config import STAFF_IDS, MENU_BUTTONS
+from config import MENU_BUTTONS
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -74,7 +74,8 @@ async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, is_
                 "/users — все пользователи\n"
                 "/stats — статистика\n"
                 "/backup — экспорт БД\n"
-                "/restore — импорт БД"
+                "/restore — импорт БД\n"
+                "/mod — управление модераторами"
             )
         elif is_moderator:
             staff_hint = (
@@ -168,7 +169,8 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
                     f"/users — пользователи\n"
                     f"/stats — статистика\n"
                     f"/backup — экспорт БД\n"
-                    f"/restore — импорт БД",
+                    f"/restore — импорт БД\n"
+                    f"/mod — управление модераторами",
                     reply_markup=main_menu_keyboard(),
                 )
             else:
@@ -192,7 +194,7 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
             )
             # Notify all staff (admin + moderators)
             bot: Bot = message.bot
-            for admin_id in STAFF_IDS:
+            for admin_id in await db.get_staff_ids():
                 try:
                     await bot.send_message(
                         admin_id,
@@ -550,7 +552,7 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_moderator:
     else:
         # Regular user — needs staff approval
         bot: Bot = message.bot
-        for admin_id in STAFF_IDS:
+        for admin_id in await db.get_staff_ids():
             try:
                 await bot.send_message(
                     admin_id,
@@ -686,3 +688,86 @@ async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: 
 
     else:
         await message.answer("Неверный формат. Используйте /spot для справки.")
+
+
+# === Admin: manage moderators ===
+
+@router.message(Command("mod"))
+async def cmd_mod(message: Message, db, is_admin: bool, **kwargs):
+    """/mod add <user_id>, /mod remove <user_id>, /mod list"""
+    if not is_admin:
+        return
+
+    parts = message.text.strip().split()
+
+    if len(parts) < 2:
+        await message.answer(
+            "👑 <b>Управление модераторами</b>\n\n"
+            "<code>/mod add UserID</code> — назначить модератора\n"
+            "<code>/mod remove UserID</code> — снять модератора\n"
+            "<code>/mod list</code> — список модераторов\n\n"
+            "Модератор может: принимать заявки, делать объявления, управлять местами.",
+            parse_mode="HTML",
+        )
+        return
+
+    action = parts[1].lower()
+
+    if action == "list":
+        mod_ids = await db.get_all_moderators()
+        if not mod_ids:
+            await message.answer("Модераторов нет.")
+            return
+        lines = ["<b>🛡 Модераторы:</b>\n"]
+        for mod_id in mod_ids:
+            user = await db.get_user(mod_id)
+            if user:
+                lines.append(f"• {user['name']} (@{user['username'] or '—'}) — <code>{mod_id}</code>")
+            else:
+                lines.append(f"• <code>{mod_id}</code> (не зарегистрирован)")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
+    elif action == "add" and len(parts) >= 3:
+        if not parts[2].isdigit():
+            await message.answer("ID должен быть числом.")
+            return
+        mod_id = int(parts[2])
+        added = await db.add_moderator(mod_id)
+        if added:
+            await message.answer(f"✅ Модератор <code>{mod_id}</code> добавлен.", parse_mode="HTML")
+            # Уведомить нового модератора
+            try:
+                bot: Bot = message.bot
+                await bot.send_message(
+                    mod_id,
+                    "🛡 <b>Вы назначены модератором!</b>\n\n"
+                    "Вам доступны команды:\n"
+                    "/pending — заявки на одобрение\n"
+                    "/announce — объявление\n"
+                    "/spot — управление местами",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify new moderator {mod_id}: {e}")
+        else:
+            await message.answer(f"Пользователь <code>{mod_id}</code> уже модератор.", parse_mode="HTML")
+
+    elif action == "remove" and len(parts) >= 3:
+        if not parts[2].isdigit():
+            await message.answer("ID должен быть числом.")
+            return
+        mod_id = int(parts[2])
+        removed = await db.remove_moderator(mod_id)
+        if removed:
+            await message.answer(f"✅ Модератор <code>{mod_id}</code> снят.", parse_mode="HTML")
+            # Уведомить бывшего модератора
+            try:
+                bot: Bot = message.bot
+                await bot.send_message(mod_id, "ℹ️ Ваши права модератора были сняты.")
+            except Exception as e:
+                logger.error(f"Failed to notify removed moderator {mod_id}: {e}")
+        else:
+            await message.answer(f"Пользователь <code>{mod_id}</code> не является модератором.", parse_mode="HTML")
+
+    else:
+        await message.answer("Неверный формат. Используйте /mod для справки.")

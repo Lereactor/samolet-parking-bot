@@ -23,13 +23,13 @@
 bot.py              — entry point, polling, health check :10000, auto-backup
 config.py           — constants, menu buttons, statuses
 handlers/
-  start.py          — /start registration (multi-spot), admin commands, add/remove spot
+  start.py          — /start registration (multi-spot), admin commands, /mod, add/remove spot
   parking.py        — blocked, SOS, away/back, directory, my_spot, help
   guest.py          — guest passes (up to 72h)
   announcements.py  — /announce broadcast to all
   group.py          — group @mention → DM to spot owner
 services/
-  database.py       — PostgreSQL: 5 tables, CRUD, backup/restore, stats
+  database.py       — PostgreSQL: 6 tables, CRUD, backup/restore, stats
 middlewares/
   access.py         — user status + role check, injects db/is_admin/is_moderator/is_approved
   rate_limit.py     — 10 msg/60s per user
@@ -49,6 +49,7 @@ docs/plans/         — design documents
 - **messages** — from_user_id, to_spot, message_text, reply_text, source (group/private/blocked/sos)
 - **guest_passes** — host_user_id, guest_info, spot_number, expires_at, is_active
 - **announcements** — admin_id, text, created_at
+- **moderators** — telegram_id (PK)
 
 ## Roles
 
@@ -70,8 +71,9 @@ docs/plans/         — design documents
 ## Environment Variables
 - `BOT_TOKEN` — Telegram bot token
 - `ADMIN_ID` — Single admin Telegram ID (e.g. `228501005`)
-- `MODERATOR_IDS` — Comma-separated moderator Telegram IDs (e.g. `123456789,987654321`)
 - `DATABASE_URL` — PostgreSQL internal connection string
+
+Moderators are managed via bot commands: `/mod add`, `/mod remove`, `/mod list`
 
 ---
 

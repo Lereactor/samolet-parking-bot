@@ -74,6 +74,49 @@ class Database:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS moderators (
+                    telegram_id BIGINT PRIMARY KEY
+                )
+            """)
+
+    # === Moderators ===
+
+    async def add_moderator(self, telegram_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "INSERT INTO moderators (telegram_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                telegram_id,
+            )
+            return result != "INSERT 0 0"
+
+    async def remove_moderator(self, telegram_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM moderators WHERE telegram_id = $1", telegram_id
+            )
+            return result != "DELETE 0"
+
+    async def is_moderator(self, telegram_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM moderators WHERE telegram_id = $1", telegram_id
+            )
+            return row is not None
+
+    async def get_all_moderators(self) -> list[int]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT telegram_id FROM moderators")
+            return [r["telegram_id"] for r in rows]
+
+    async def get_staff_ids(self) -> set[int]:
+        """Возвращает set из ADMIN_ID + все модераторы из БД."""
+        from config import ADMIN_ID
+        mods = await self.get_all_moderators()
+        staff = set(mods)
+        if ADMIN_ID:
+            staff.add(ADMIN_ID)
+        return staff
 
     # === Users ===
 
@@ -321,6 +364,7 @@ class Database:
             messages = await conn.fetch("SELECT * FROM messages")
             guests = await conn.fetch("SELECT * FROM guest_passes")
             announcements = await conn.fetch("SELECT * FROM announcements")
+            moderators = await conn.fetch("SELECT * FROM moderators")
 
         def serialize(rows):
             result = []
@@ -339,6 +383,7 @@ class Database:
             "messages": serialize(messages),
             "guest_passes": serialize(guests),
             "announcements": serialize(announcements),
+            "moderators": serialize(moderators),
         }
         return json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -401,5 +446,13 @@ class Database:
                     a["admin_id"], a["text"], a["created_at"],
                 )
             counts["announcements"] = len(data.get("announcements", []))
+
+            # Moderators
+            for mod in data.get("moderators", []):
+                await conn.execute(
+                    "INSERT INTO moderators (telegram_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                    mod["telegram_id"],
+                )
+            counts["moderators"] = len(data.get("moderators", []))
 
         return counts
