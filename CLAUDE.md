@@ -7,6 +7,7 @@
 - Parking spots are plain numbers (integers)
 - Users can have multiple spots
 - Admin is also a regular user (with auto-approve)
+- Multiple admins supported via ADMIN_IDS env var
 
 ## Code Rules
 - One Database instance — passed via middleware, not created in handlers
@@ -39,7 +40,7 @@ docs/plans/         — design documents
 - PostgreSQL with asyncpg, connection pool (min 1, max 5)
 - Automatic table creation on startup
 - Backup/restore via JSON export (like school-bot)
-- Auto-backup to admin every 30 days
+- Auto-backup to all admins every 30 days
 - Hourly cleanup of expired guest passes
 
 ### Tables
@@ -51,7 +52,8 @@ docs/plans/         — design documents
 
 ## Environment Variables
 - `BOT_TOKEN` — Telegram bot token
-- `ADMIN_ID` — Admin Telegram ID (228501005)
+- `ADMIN_IDS` — Comma-separated admin Telegram IDs (e.g. `228501005,123456789`)
+- `ADMIN_ID` — Fallback: single admin ID if ADMIN_IDS not set
 - `DATABASE_URL` — PostgreSQL internal connection string
 
 ---

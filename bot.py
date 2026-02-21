@@ -56,9 +56,9 @@ async def run_web_server():
 
 # === Auto-backup ===
 
-async def auto_backup_loop(bot: Bot, db: Database, admin_id: int):
-    """Export full DB every 30 days and send to admin."""
-    from config import ADMIN_ID
+async def auto_backup_loop(bot: Bot, db: Database):
+    """Export full DB every 30 days and send to all admins."""
+    from config import ADMIN_IDS
     from aiogram.types import BufferedInputFile
 
     while True:
@@ -68,8 +68,12 @@ async def auto_backup_loop(bot: Bot, db: Database, admin_id: int):
             file = BufferedInputFile(
                 data.encode("utf-8"), filename="parking_auto_backup.json"
             )
-            await bot.send_document(ADMIN_ID, file, caption="📦 Автоматический бэкап (30 дней)")
-            logger.info("Auto-backup sent to admin")
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_document(admin_id, file, caption="📦 Автоматический бэкап (30 дней)")
+                except Exception as e:
+                    logger.error(f"Auto-backup to {admin_id} failed: {e}")
+            logger.info(f"Auto-backup sent to {len(ADMIN_IDS)} admin(s)")
         except Exception as e:
             logger.error(f"Auto-backup failed: {e}")
 
@@ -126,8 +130,7 @@ async def main():
     web_runner = await run_web_server()
 
     # Background tasks
-    from config import ADMIN_ID
-    asyncio.create_task(auto_backup_loop(bot, db, ADMIN_ID))
+    asyncio.create_task(auto_backup_loop(bot, db))
     asyncio.create_task(cleanup_loop(db))
 
     logger.info("Bot is running!")

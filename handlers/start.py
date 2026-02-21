@@ -11,7 +11,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile,
 )
 
-from config import ADMIN_ID, MENU_BUTTONS
+from config import ADMIN_IDS, MENU_BUTTONS
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -166,32 +166,33 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
                 f"Места: {spots_text}\n\n"
                 f"Ожидайте одобрения администратором."
             )
-            # Notify admin
+            # Notify all admins
             bot: Bot = message.bot
-            try:
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"📋 <b>Новая заявка</b>\n\n"
-                    f"Имя: {name}\n"
-                    f"Места: {spots_text}\n"
-                    f"Username: @{message.from_user.username or 'нет'}\n"
-                    f"ID: <code>{message.from_user.id}</code>",
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="✅ Одобрить",
-                                callback_data=f"approvemulti_{message.from_user.id}",
-                            ),
-                            InlineKeyboardButton(
-                                text="❌ Отклонить",
-                                callback_data=f"reject_{message.from_user.id}",
-                            ),
-                        ]
-                    ]),
-                )
-            except Exception as e:
-                logger.error(f"Failed to notify admin: {e}")
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"📋 <b>Новая заявка</b>\n\n"
+                        f"Имя: {name}\n"
+                        f"Места: {spots_text}\n"
+                        f"Username: @{message.from_user.username or 'нет'}\n"
+                        f"ID: <code>{message.from_user.id}</code>",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="✅ Одобрить",
+                                    callback_data=f"approvemulti_{message.from_user.id}",
+                                ),
+                                InlineKeyboardButton(
+                                    text="❌ Отклонить",
+                                    callback_data=f"reject_{message.from_user.id}",
+                                ),
+                            ]
+                        ]),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin_id}: {e}")
         return
 
     # Add a spot number
@@ -525,29 +526,30 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_admin: boo
     else:
         # Regular user — needs admin approval
         bot: Bot = message.bot
-        try:
-            await bot.send_message(
-                ADMIN_ID,
-                f"📋 <b>Запрос на доп. место</b>\n\n"
-                f"Пользователь: {message.from_user.full_name}\n"
-                f"Место: {spot_number}\n"
-                f"ID: <code>{message.from_user.id}</code>",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="✅ Одобрить",
-                            callback_data=f"approve_{message.from_user.id}_{spot_number}",
-                        ),
-                        InlineKeyboardButton(
-                            text="❌ Отклонить",
-                            callback_data=f"reject_{message.from_user.id}",
-                        ),
-                    ]
-                ]),
-            )
-        except Exception as e:
-            logger.error(f"Failed to notify admin: {e}")
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"📋 <b>Запрос на доп. место</b>\n\n"
+                    f"Пользователь: {message.from_user.full_name}\n"
+                    f"Место: {spot_number}\n"
+                    f"ID: <code>{message.from_user.id}</code>",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Одобрить",
+                                callback_data=f"approve_{message.from_user.id}_{spot_number}",
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ Отклонить",
+                                callback_data=f"reject_{message.from_user.id}",
+                            ),
+                        ]
+                    ]),
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify admin {admin_id}: {e}")
         await message.answer(
             f"Запрос на место {spot_number} отправлен администратору. Ожидайте."
         )

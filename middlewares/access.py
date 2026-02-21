@@ -4,7 +4,7 @@ from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
 
-from config import ADMIN_ID
+from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class AccessMiddleware(BaseMiddleware):
 
         if hasattr(event, "from_user") and event.from_user:
             user_id = event.from_user.id
-            data["is_admin"] = user_id == ADMIN_ID
+            data["is_admin"] = user_id in ADMIN_IDS
 
             user = await self.db.get_user(user_id)
             if user:
