@@ -6,8 +6,8 @@
 - No AI/LLM — purely utility bot with buttons and commands
 - Parking spots are plain numbers (integers)
 - Users can have multiple spots
-- Admin is also a regular user (with auto-approve)
-- Multiple admins supported via ADMIN_IDS env var
+- Two staff roles: Admin (one, full access) and Moderators (approve, announce, spots)
+- Staff (admin + moderators) auto-approved on registration
 
 ## Code Rules
 - One Database instance — passed via middleware, not created in handlers
@@ -31,7 +31,7 @@ handlers/
 services/
   database.py       — PostgreSQL: 5 tables, CRUD, backup/restore, stats
 middlewares/
-  access.py         — user status + admin check, injects db/is_admin/is_approved
+  access.py         — user status + role check, injects db/is_admin/is_moderator/is_approved
   rate_limit.py     — 10 msg/60s per user
 docs/plans/         — design documents
 ```
@@ -40,7 +40,7 @@ docs/plans/         — design documents
 - PostgreSQL with asyncpg, connection pool (min 1, max 5)
 - Automatic table creation on startup
 - Backup/restore via JSON export (like school-bot)
-- Auto-backup to all admins every 30 days
+- Auto-backup to admin every 30 days
 - Hourly cleanup of expired guest passes
 
 ### Tables
@@ -50,10 +50,27 @@ docs/plans/         — design documents
 - **guest_passes** — host_user_id, guest_info, spot_number, expires_at, is_active
 - **announcements** — admin_id, text, created_at
 
+## Roles
+
+| Function | Admin | Moderator |
+|----------|:-----:|:---------:|
+| Approve/reject users | yes | yes |
+| /pending | yes | yes |
+| /announce | yes | yes |
+| /spot (add/remove/info) | yes | yes |
+| /users | yes | no |
+| /stats | yes | no |
+| /backup | yes | no |
+| /restore | yes | no |
+| Ban users | yes | no |
+| Auto-backup recipient | yes | no |
+| Auto-approve on registration | yes | yes |
+| Receive application notifications | yes | yes |
+
 ## Environment Variables
 - `BOT_TOKEN` — Telegram bot token
-- `ADMIN_IDS` — Comma-separated admin Telegram IDs (e.g. `228501005,123456789`)
-- `ADMIN_ID` — Fallback: single admin ID if ADMIN_IDS not set
+- `ADMIN_ID` — Single admin Telegram ID (e.g. `228501005`)
+- `MODERATOR_IDS` — Comma-separated moderator Telegram IDs (e.g. `123456789,987654321`)
 - `DATABASE_URL` — PostgreSQL internal connection string
 
 ---
@@ -135,7 +152,7 @@ curl -X PUT -H "Authorization: Bearer $RENDER_KEY" \
        │                                       │
   /start → имя → места → "готово"         @bot 142 текст
        │                                       │
-  Заявка → Админ одобряет              Парсинг номера места
+  Заявка → Стафф одобряет              Парсинг номера места
        │                                       │
   Меню с кнопками                       DM владельцу места
        │                                       │

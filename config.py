@@ -6,16 +6,18 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Admin IDs — поддержка нескольких админов через запятую
-# ADMIN_IDS=228501005,123456789 или старый ADMIN_ID=228501005
-ADMIN_IDS: set[int] = set()
-_admin_ids_str = os.getenv("ADMIN_IDS", "")
-if _admin_ids_str:
-    ADMIN_IDS = {int(x.strip()) for x in _admin_ids_str.split(",") if x.strip().isdigit()}
-if not ADMIN_IDS:
-    _single = os.getenv("ADMIN_ID", "0")
-    if _single and _single != "0":
-        ADMIN_IDS = {int(_single)}
+# Admin — единственный главный администратор
+_admin_str = os.getenv("ADMIN_ID", "0")
+ADMIN_ID: int = int(_admin_str) if _admin_str and _admin_str.strip().isdigit() else 0
+
+# Moderators — могут принимать заявки, объявления, управлять местами
+MODERATOR_IDS: set[int] = set()
+_mod_ids_str = os.getenv("MODERATOR_IDS", "")
+if _mod_ids_str:
+    MODERATOR_IDS = {int(x.strip()) for x in _mod_ids_str.split(",") if x.strip().isdigit()}
+
+# Staff = admin + moderators (для общих проверок)
+STAFF_IDS: set[int] = ({ADMIN_ID} if ADMIN_ID else set()) | MODERATOR_IDS
 
 # Rate limiting
 RATE_LIMIT_MESSAGES = 10

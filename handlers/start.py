@@ -11,7 +11,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile,
 )
 
-from config import ADMIN_IDS, MENU_BUTTONS
+from config import STAFF_IDS, MENU_BUTTONS
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -59,23 +59,32 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 # === /start ===
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, user_status: str, **kwargs):
+async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, is_moderator: bool, user_status: str, **kwargs):
     await state.clear()
 
     if user_status == "approved":
-        admin_hint = ""
+        staff_hint = ""
         if is_admin:
-            admin_hint = (
-                "\n\n👑 <b>Админ-команды:</b>\n"
+            staff_hint = (
+                "\n\n🛡 <b>Модерация:</b>\n"
                 "/pending — заявки на одобрение\n"
+                "/announce — объявление\n"
+                "/spot — управление местами\n\n"
+                "👑 <b>Администрирование:</b>\n"
                 "/users — все пользователи\n"
                 "/stats — статистика\n"
-                "/announce — объявление\n"
                 "/backup — экспорт БД\n"
                 "/restore — импорт БД"
             )
+        elif is_moderator:
+            staff_hint = (
+                "\n\n🛡 <b>Модерация:</b>\n"
+                "/pending — заявки на одобрение\n"
+                "/announce — объявление\n"
+                "/spot — управление местами"
+            )
         await message.answer(
-            f"Вы уже зарегистрированы! Используйте меню ниже.{admin_hint}",
+            f"Вы уже зарегистрированы! Используйте меню ниже.{staff_hint}",
             parse_mode="HTML",
             reply_markup=main_menu_keyboard(),
         )
@@ -122,7 +131,7 @@ async def registration_name(message: Message, state: FSMContext, **kwargs):
 
 
 @router.message(RegistrationState.waiting_for_spot)
-async def registration_spot(message: Message, state: FSMContext, db, is_admin: bool, **kwargs):
+async def registration_spot(message: Message, state: FSMContext, db, is_admin: bool, is_moderator: bool, **kwargs):
     text = message.text.strip().lower()
 
     # Finish adding spots
@@ -140,25 +149,39 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
 
         spots_text = ", ".join(str(s) for s in spots)
 
-        if is_admin:
-            # Auto-approve admin
+        if is_moderator:
+            # Auto-approve staff (admin + moderators)
             await db.set_user_status(message.from_user.id, "approved")
             for spot_number in spots:
                 await db.add_spot(spot_number, message.from_user.id)
             await state.clear()
-            await message.answer(
-                f"👑 Вы зарегистрированы как администратор!\n\n"
-                f"Имя: {name}\n"
-                f"Места: {spots_text}\n\n"
-                f"Админ-команды:\n"
-                f"/pending — заявки\n"
-                f"/users — пользователи\n"
-                f"/stats — статистика\n"
-                f"/announce — объявление\n"
-                f"/backup — экспорт БД\n"
-                f"/restore — импорт БД",
-                reply_markup=main_menu_keyboard(),
-            )
+            if is_admin:
+                await message.answer(
+                    f"👑 Вы зарегистрированы как администратор!\n\n"
+                    f"Имя: {name}\n"
+                    f"Места: {spots_text}\n\n"
+                    f"🛡 Модерация:\n"
+                    f"/pending — заявки\n"
+                    f"/announce — объявление\n"
+                    f"/spot — управление местами\n\n"
+                    f"👑 Администрирование:\n"
+                    f"/users — пользователи\n"
+                    f"/stats — статистика\n"
+                    f"/backup — экспорт БД\n"
+                    f"/restore — импорт БД",
+                    reply_markup=main_menu_keyboard(),
+                )
+            else:
+                await message.answer(
+                    f"🛡 Вы зарегистрированы как модератор!\n\n"
+                    f"Имя: {name}\n"
+                    f"Места: {spots_text}\n\n"
+                    f"Команды модерации:\n"
+                    f"/pending — заявки\n"
+                    f"/announce — объявление\n"
+                    f"/spot — управление местами",
+                    reply_markup=main_menu_keyboard(),
+                )
         else:
             await state.clear()
             await message.answer(
@@ -167,9 +190,9 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
                 f"Места: {spots_text}\n\n"
                 f"Ожидайте одобрения администратором."
             )
-            # Notify all admins
+            # Notify all staff (admin + moderators)
             bot: Bot = message.bot
-            for admin_id in ADMIN_IDS:
+            for admin_id in STAFF_IDS:
                 try:
                     await bot.send_message(
                         admin_id,
@@ -232,10 +255,10 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
 # === Admin: approve/reject ===
 
 @router.callback_query(F.data.startswith("approvemulti_"))
-async def approve_user_multi(callback: CallbackQuery, db, is_admin: bool, **kwargs):
+async def approve_user_multi(callback: CallbackQuery, db, is_moderator: bool, **kwargs):
     """Approve user and assign all their pending spots."""
-    if not is_admin:
-        await callback.answer("Только для администратора", show_alert=True)
+    if not is_moderator:
+        await callback.answer("Только для модератора или администратора", show_alert=True)
         return
 
     user_id = int(callback.data.split("_")[1])
@@ -286,10 +309,10 @@ async def approve_user_multi(callback: CallbackQuery, db, is_admin: bool, **kwar
 
 
 @router.callback_query(F.data.startswith("approve_"))
-async def approve_user(callback: CallbackQuery, db, is_admin: bool, **kwargs):
+async def approve_user(callback: CallbackQuery, db, is_moderator: bool, **kwargs):
     """Legacy single-spot approve (from /pending)."""
-    if not is_admin:
-        await callback.answer("Только для администратора", show_alert=True)
+    if not is_moderator:
+        await callback.answer("Только для модератора или администратора", show_alert=True)
         return
 
     parts = callback.data.split("_")
@@ -331,9 +354,9 @@ async def approve_user(callback: CallbackQuery, db, is_admin: bool, **kwargs):
 
 
 @router.callback_query(F.data.startswith("reject_"))
-async def reject_user(callback: CallbackQuery, db, is_admin: bool, **kwargs):
-    if not is_admin:
-        await callback.answer("Только для администратора", show_alert=True)
+async def reject_user(callback: CallbackQuery, db, is_moderator: bool, **kwargs):
+    if not is_moderator:
+        await callback.answer("Только для модератора или администратора", show_alert=True)
         return
 
     user_id = int(callback.data.split("_")[1])
@@ -356,8 +379,8 @@ async def reject_user(callback: CallbackQuery, db, is_admin: bool, **kwargs):
 # === Admin commands ===
 
 @router.message(Command("pending"))
-async def cmd_pending(message: Message, db, is_admin: bool, **kwargs):
-    if not is_admin:
+async def cmd_pending(message: Message, db, is_moderator: bool, **kwargs):
+    if not is_moderator:
         return
 
     pending = await db.get_users_by_status("pending")
@@ -499,7 +522,7 @@ async def add_spot_start(message: Message, state: FSMContext, is_approved: bool,
 
 
 @router.message(AddSpotState.waiting_for_spot)
-async def add_spot_number(message: Message, state: FSMContext, db, is_admin: bool, **kwargs):
+async def add_spot_number(message: Message, state: FSMContext, db, is_moderator: bool, **kwargs):
     text = message.text.strip()
     if not text.isdigit():
         await message.answer("Введите номер места как число:")
@@ -516,8 +539,8 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_admin: boo
         await state.clear()
         return
 
-    if is_admin:
-        # Admin can add spots directly
+    if is_moderator:
+        # Staff can add spots directly
         await db.add_spot(spot_number, message.from_user.id)
         spots = await db.get_user_spots(message.from_user.id)
         spots_text = ", ".join(str(s["spot_number"]) for s in spots)
@@ -525,9 +548,9 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_admin: boo
             f"✅ Место {spot_number} добавлено!\nВаши места: {spots_text}"
         )
     else:
-        # Regular user — needs admin approval
+        # Regular user — needs staff approval
         bot: Bot = message.bot
-        for admin_id in ADMIN_IDS:
+        for admin_id in STAFF_IDS:
             try:
                 await bot.send_message(
                     admin_id,
@@ -602,9 +625,9 @@ async def remove_spot_number(message: Message, state: FSMContext, db, **kwargs):
 # === Admin: manage spots for any user ===
 
 @router.message(Command("spot"))
-async def cmd_admin_spot(message: Message, state: FSMContext, db, is_admin: bool, **kwargs):
-    """Admin command: /spot add 142 228501005 or /spot remove 142"""
-    if not is_admin:
+async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: bool, **kwargs):
+    """Staff command: /spot add 142 228501005 or /spot remove 142"""
+    if not is_moderator:
         return
 
     parts = message.text.strip().split()
@@ -614,7 +637,7 @@ async def cmd_admin_spot(message: Message, state: FSMContext, db, is_admin: bool
 
     if len(parts) < 2:
         await message.answer(
-            "👑 <b>Управление местами</b>\n\n"
+            "🛡 <b>Управление местами</b>\n\n"
             "<code>/spot add НомерМеста UserID</code> — назначить место\n"
             "<code>/spot remove НомерМеста</code> — освободить место\n"
             "<code>/spot info НомерМеста</code> — инфо о месте",

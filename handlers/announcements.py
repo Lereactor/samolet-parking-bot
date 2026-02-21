@@ -15,8 +15,8 @@ class AnnounceState(StatesGroup):
 
 
 @router.message(Command("announce"))
-async def cmd_announce(message: Message, state: FSMContext, is_admin: bool, **kwargs):
-    if not is_admin:
+async def cmd_announce(message: Message, state: FSMContext, is_moderator: bool, **kwargs):
+    if not is_moderator:
         return
 
     await message.answer(
@@ -26,8 +26,8 @@ async def cmd_announce(message: Message, state: FSMContext, is_admin: bool, **kw
 
 
 @router.message(AnnounceState.waiting_for_text)
-async def announce_text(message: Message, state: FSMContext, db, is_admin: bool, **kwargs):
-    if not is_admin:
+async def announce_text(message: Message, state: FSMContext, db, is_moderator: bool, **kwargs):
+    if not is_moderator:
         return
 
     text = message.text.strip()
