@@ -11,7 +11,7 @@ from config import BOT_TOKEN, DATABASE_URL
 from services.database import Database
 from middlewares.rate_limit import RateLimitMiddleware
 from middlewares.access import AccessMiddleware
-from handlers import start, parking, guest, announcements, group
+from handlers import start, parking, announcements, group
 
 # === Logging ===
 
@@ -93,6 +93,29 @@ async def cleanup_loop(db: Database):
             logger.error(f"Cleanup failed: {e}")
 
 
+# === Reminders loop ===
+
+async def reminders_loop(bot: Bot, db: Database):
+    """Check for pending reminders every 60 seconds and send them."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            pending = await db.get_pending_reminders()
+            for r in pending:
+                try:
+                    await bot.send_message(
+                        r["user_id"],
+                        f"⏰ <b>Напоминание об оплате</b>\n\n"
+                        f"Место <b>{r['spot_number']}</b> — пора оплатить парковку!",
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send reminder {r['id']} to {r['user_id']}: {e}")
+                await db.mark_reminder_sent(r["id"])
+        except Exception as e:
+            logger.error(f"Reminders loop error: {e}")
+
+
 # === Main ===
 
 async def main():
@@ -123,7 +146,6 @@ async def main():
     # Routers (order matters: specific first, catch-all last)
     dp.include_router(start.router)
     dp.include_router(parking.router)
-    dp.include_router(guest.router)
     dp.include_router(announcements.router)
     dp.include_router(group.router)  # Group handler last (catch-all for groups)
 
@@ -133,6 +155,7 @@ async def main():
     # Background tasks
     asyncio.create_task(auto_backup_loop(bot, db))
     asyncio.create_task(cleanup_loop(db))
+    asyncio.create_task(reminders_loop(bot, db))
 
     logger.info("Bot is running!")
 

@@ -41,16 +41,15 @@ class BackupState(StatesGroup):
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=MENU_BUTTONS["blocked"]),
-             KeyboardButton(text=MENU_BUTTONS["sos"])],
-            [KeyboardButton(text=MENU_BUTTONS["away"]),
-             KeyboardButton(text=MENU_BUTTONS["guest"])],
-            [KeyboardButton(text=MENU_BUTTONS["directory"]),
-             KeyboardButton(text=MENU_BUTTONS["my_spot"])],
-            [KeyboardButton(text=MENU_BUTTONS["add_spot"]),
-             KeyboardButton(text=MENU_BUTTONS["remove_spot"])],
-            [KeyboardButton(text=MENU_BUTTONS["contact_uk"]),
-             KeyboardButton(text=MENU_BUTTONS["help"])],
+            [KeyboardButton(text=MENU_BUTTONS["notify"]),
+             KeyboardButton(text=MENU_BUTTONS["directory"])],
+            [KeyboardButton(text=MENU_BUTTONS["my_spot"]),
+             KeyboardButton(text=MENU_BUTTONS["history"])],
+            [KeyboardButton(text=MENU_BUTTONS["reminder"]),
+             KeyboardButton(text=MENU_BUTTONS["add_spot"])],
+            [KeyboardButton(text=MENU_BUTTONS["remove_spot"]),
+             KeyboardButton(text=MENU_BUTTONS["contact_uk"])],
+            [KeyboardButton(text=MENU_BUTTONS["help"])],
         ],
         resize_keyboard=True,
     )
@@ -192,30 +191,56 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
                 f"Места: {spots_text}\n\n"
                 f"Ожидайте одобрения администратором."
             )
+            # Check for conflicts
+            conflicts = data.get("conflicts", [])
+            conflict_text = ""
+            if conflicts:
+                conflict_lines = []
+                for c_spot in conflicts:
+                    c_owners = await db.get_spot_owners(c_spot)
+                    c_names = ", ".join(f"{o['name']}" for o in c_owners)
+                    conflict_lines.append(f"  ⚠️ Место {c_spot} — сейчас у: {c_names}")
+                conflict_text = "\n<b>Конфликты мест:</b>\n" + "\n".join(conflict_lines)
+
             # Notify all staff (admin + moderators)
             bot: Bot = message.bot
             for admin_id in await db.get_staff_ids():
                 try:
+                    # Build buttons based on conflicts
+                    buttons = []
+                    if conflicts:
+                        for c_spot in conflicts:
+                            buttons.append([
+                                InlineKeyboardButton(
+                                    text=f"✅ Место {c_spot} → новому",
+                                    callback_data=f"spotconflict_approve_{message.from_user.id}_{c_spot}",
+                                ),
+                                InlineKeyboardButton(
+                                    text=f"❌ Место {c_spot} — оставить",
+                                    callback_data=f"spotconflict_reject_{message.from_user.id}_{c_spot}",
+                                ),
+                            ])
+                    buttons.append([
+                        InlineKeyboardButton(
+                            text="✅ Одобрить",
+                            callback_data=f"approvemulti_{message.from_user.id}",
+                        ),
+                        InlineKeyboardButton(
+                            text="❌ Отклонить",
+                            callback_data=f"reject_{message.from_user.id}",
+                        ),
+                    ])
+
                     await bot.send_message(
                         admin_id,
                         f"📋 <b>Новая заявка</b>\n\n"
                         f"Имя: {name}\n"
                         f"Места: {spots_text}\n"
                         f"Username: @{message.from_user.username or 'нет'}\n"
-                        f"ID: <code>{message.from_user.id}</code>",
+                        f"ID: <code>{message.from_user.id}</code>"
+                        f"{conflict_text}",
                         parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text="✅ Одобрить",
-                                    callback_data=f"approvemulti_{message.from_user.id}",
-                                ),
-                                InlineKeyboardButton(
-                                    text="❌ Отклонить",
-                                    callback_data=f"reject_{message.from_user.id}",
-                                ),
-                            ]
-                        ]),
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
                     )
                 except Exception as e:
                     logger.error(f"Failed to notify admin {admin_id}: {e}")
@@ -231,27 +256,38 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
         await message.answer("Номер места должен быть от 1 до 9999:")
         return
 
-    existing = await db.get_spot(spot_number)
-    if existing:
-        await message.answer(
-            f"Место {spot_number} уже зарегистрировано за другим пользователем.\n"
-            "Введите другой номер:"
-        )
-        return
-
     data = await state.get_data()
     spots = data.get("spots", [])
     if spot_number in spots:
         await message.answer(f"Место {spot_number} уже в вашем списке. Введите другой номер или <b>готово</b>:", parse_mode="HTML")
         return
 
+    # Check if spot is already taken by someone else
+    existing_owners = await db.get_spot_owners(spot_number)
+    if existing_owners:
+        # Mark as conflicted — will be resolved by staff
+        conflicts = data.get("conflicts", [])
+        conflicts.append(spot_number)
+        await state.update_data(conflicts=conflicts)
+
+        owners_text = ", ".join(f"{o['name']} (<code>{o['telegram_id']}</code>)" for o in existing_owners)
+        await message.answer(
+            f"⚠️ Место {spot_number} уже зарегистрировано за: {owners_text}.\n"
+            f"Место добавлено в заявку — решение примет администрация.\n\n"
+            f"Введите ещё номер или отправьте <b>готово</b>.",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(
+            f"✅ Место {spot_number} добавлено.\n\n"
+            f"Введите ещё номер или отправьте <b>готово</b>.",
+            parse_mode="HTML",
+        )
+
     spots.append(spot_number)
     await state.update_data(spots=spots)
-    await message.answer(
-        f"✅ Место {spot_number} добавлено. Ваши места: {', '.join(str(s) for s in spots)}\n\n"
-        f"Введите ещё номер или отправьте <b>готово</b>.",
-        parse_mode="HTML",
-    )
+    all_spots_text = ", ".join(str(s) for s in spots)
+    await message.answer(f"Ваши места: {all_spots_text}", parse_mode="HTML")
 
 
 # === Admin: approve/reject ===
@@ -511,6 +547,92 @@ async def ban_user(callback: CallbackQuery, db, is_admin: bool, **kwargs):
     await callback.answer()
 
 
+# === Spot conflict resolution ===
+
+@router.callback_query(F.data.startswith("spotconflict_approve_"))
+async def spotconflict_approve(callback: CallbackQuery, db, is_moderator: bool, **kwargs):
+    """Approve spot transfer — add spot to new user (keep existing owners too)."""
+    if not is_moderator:
+        await callback.answer("Только для модератора или администратора", show_alert=True)
+        return
+
+    # Format: spotconflict_approve_{user_id}_{spot_number}
+    parts = callback.data.split("_")
+    user_id = int(parts[2])
+    spot_number = int(parts[3])
+
+    user = await db.get_user(user_id)
+    if not user:
+        await callback.message.edit_text(
+            callback.message.text + f"\n\n⚠️ Пользователь {user_id} не найден.",
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
+    # Add spot to new user (as co-owner)
+    await db.add_spot(spot_number, user_id)
+
+    # Notify new owner
+    bot: Bot = callback.bot
+    try:
+        await bot.send_message(
+            user_id,
+            f"✅ Место <b>{spot_number}</b> назначено вам!",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify user {user_id}: {e}")
+
+    # Notify existing owners
+    owners = await db.get_spot_owners(spot_number)
+    for owner in owners:
+        if owner["telegram_id"] != user_id:
+            try:
+                await bot.send_message(
+                    owner["telegram_id"],
+                    f"ℹ️ К месту <b>{spot_number}</b> добавлен совладелец: {user['name']}",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify owner {owner['telegram_id']}: {e}")
+
+    await callback.message.edit_text(
+        callback.message.text + f"\n\n✅ Место {spot_number} передано {user['name']}.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("spotconflict_reject_"))
+async def spotconflict_reject(callback: CallbackQuery, db, is_moderator: bool, **kwargs):
+    """Reject spot transfer — keep current owner."""
+    if not is_moderator:
+        await callback.answer("Только для модератора или администратора", show_alert=True)
+        return
+
+    parts = callback.data.split("_")
+    user_id = int(parts[2])
+    spot_number = int(parts[3])
+
+    # Notify rejected user
+    bot: Bot = callback.bot
+    try:
+        await bot.send_message(
+            user_id,
+            f"❌ Место <b>{spot_number}</b> оставлено за текущим владельцем.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify user {user_id}: {e}")
+
+    await callback.message.edit_text(
+        callback.message.text + f"\n\n❌ Место {spot_number} — оставлено текущему владельцу.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 # === Add spot (for approved users) ===
 
 @router.message(F.text == MENU_BUTTONS["add_spot"])
@@ -535,11 +657,14 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_moderator:
         await message.answer("Номер места должен быть от 1 до 9999:")
         return
 
-    existing = await db.get_spot(spot_number)
-    if existing:
-        await message.answer(f"Место {spot_number} уже занято.")
+    # Check if user already has this spot
+    user_spots = await db.get_user_spots(message.from_user.id)
+    if any(s["spot_number"] == spot_number for s in user_spots):
+        await message.answer(f"Место {spot_number} уже принадлежит вам.")
         await state.clear()
         return
+
+    existing_owners = await db.get_spot_owners(spot_number)
 
     if is_moderator:
         # Staff can add spots directly
@@ -549,8 +674,41 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_moderator:
         await message.answer(
             f"✅ Место {spot_number} добавлено!\nВаши места: {spots_text}"
         )
+    elif existing_owners:
+        # Spot is taken — send conflict to staff
+        owners_text = ", ".join(f"{o['name']}" for o in existing_owners)
+        bot: Bot = message.bot
+        for admin_id in await db.get_staff_ids():
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"⚠️ <b>Конфликт места</b>\n\n"
+                    f"Место: {spot_number}\n"
+                    f"Текущие владельцы: {owners_text}\n"
+                    f"Претендент: {message.from_user.full_name}\n"
+                    f"ID: <code>{message.from_user.id}</code>",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Передать новому",
+                                callback_data=f"spotconflict_approve_{message.from_user.id}_{spot_number}",
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ Оставить текущему",
+                                callback_data=f"spotconflict_reject_{message.from_user.id}_{spot_number}",
+                            ),
+                        ]
+                    ]),
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify admin {admin_id}: {e}")
+        await message.answer(
+            f"Место {spot_number} занято ({owners_text}). "
+            f"Запрос отправлен администрации для решения."
+        )
     else:
-        # Regular user — needs staff approval
+        # Regular user, free spot — needs staff approval
         bot: Bot = message.bot
         for admin_id in await db.get_staff_ids():
             try:
@@ -628,21 +786,19 @@ async def remove_spot_number(message: Message, state: FSMContext, db, **kwargs):
 
 @router.message(Command("spot"))
 async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: bool, **kwargs):
-    """Staff command: /spot add 142 228501005 or /spot remove 142"""
+    """Staff command: /spot add/remove/info/force"""
     if not is_moderator:
         return
 
     parts = message.text.strip().split()
-    # /spot add <number> <user_id> — assign spot to user
-    # /spot remove <number> — free spot from whoever owns it
-    # /spot — show help
 
     if len(parts) < 2:
         await message.answer(
             "🛡 <b>Управление местами</b>\n\n"
             "<code>/spot add НомерМеста UserID</code> — назначить место\n"
-            "<code>/spot remove НомерМеста</code> — освободить место\n"
-            "<code>/spot info НомерМеста</code> — инфо о месте",
+            "<code>/spot remove НомерМеста</code> — освободить место (у всех)\n"
+            "<code>/spot info НомерМеста</code> — инфо о месте\n"
+            "<code>/spot force НомерМеста UserID</code> — добавить совладельца",
             parse_mode="HTML",
         )
         return
@@ -658,11 +814,57 @@ async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: 
             await message.answer(f"Пользователь {user_id} не найден.")
             return
 
+        existing_owners = await db.get_spot_owners(spot_number)
         success = await db.add_spot(spot_number, user_id)
         if success:
             await message.answer(f"✅ Место {spot_number} назначено {user['name']} ({user_id})")
         else:
-            await message.answer(f"⚠️ Место {spot_number} уже занято.")
+            await message.answer(
+                f"⚠️ Место {spot_number} уже принадлежит этому пользователю.\n"
+                f"Используйте <code>/spot force {spot_number} {user_id}</code> для добавления совладельца.",
+                parse_mode="HTML",
+            )
+
+    elif action == "force" and len(parts) >= 4:
+        spot_number = int(parts[2])
+        user_id = int(parts[3])
+
+        user = await db.get_user(user_id)
+        if not user:
+            await message.answer(f"Пользователь {user_id} не найден.")
+            return
+
+        # Add as co-owner (won't duplicate due to UNIQUE constraint)
+        success = await db.add_spot(spot_number, user_id)
+        if not success:
+            await message.answer(f"Место {spot_number} уже принадлежит {user['name']}.")
+            return
+
+        # Notify existing owners
+        existing_owners = await db.get_spot_owners(spot_number)
+        bot: Bot = message.bot
+        for owner in existing_owners:
+            if owner["telegram_id"] != user_id:
+                try:
+                    await bot.send_message(
+                        owner["telegram_id"],
+                        f"ℹ️ К месту <b>{spot_number}</b> добавлен новый совладелец: {user['name']}",
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify owner {owner['telegram_id']}: {e}")
+
+        # Notify new owner
+        try:
+            await bot.send_message(
+                user_id,
+                f"✅ Вам назначено место <b>{spot_number}</b>.",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify new owner {user_id}: {e}")
+
+        await message.answer(f"✅ Место {spot_number} назначено {user['name']} ({user_id}) как совладельцу.")
 
     elif action == "remove" and len(parts) >= 3:
         spot_number = int(parts[2])
@@ -672,17 +874,16 @@ async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: 
             return
 
         await db.force_remove_spot(spot_number)
-        await message.answer(f"✅ Место {spot_number} освобождено.")
+        await message.answer(f"✅ Место {spot_number} освобождено (у всех владельцев).")
 
     elif action == "info" and len(parts) >= 3:
         spot_number = int(parts[2])
-        owner = await db.get_spot_owner(spot_number)
-        if owner:
-            await message.answer(
-                f"Место {spot_number}: {owner['name']} (@{owner['username'] or '—'})\n"
-                f"ID: <code>{owner['telegram_id']}</code>",
-                parse_mode="HTML",
-            )
+        owners = await db.get_spot_owners(spot_number)
+        if owners:
+            lines = [f"Место {spot_number}:"]
+            for o in owners:
+                lines.append(f"  • {o['name']} (@{o['username'] or '—'}) — <code>{o['telegram_id']}</code>")
+            await message.answer("\n".join(lines), parse_mode="HTML")
         else:
             await message.answer(f"Место {spot_number} свободно.")
 

@@ -37,12 +37,27 @@ class Database:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS parking_spots (
                     id SERIAL PRIMARY KEY,
-                    spot_number INTEGER NOT NULL UNIQUE,
+                    spot_number INTEGER NOT NULL,
                     user_id BIGINT NOT NULL REFERENCES users(telegram_id),
                     is_temporary_free BOOLEAN NOT NULL DEFAULT FALSE,
                     free_until TIMESTAMPTZ,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
+            """)
+            # Migrate: drop old UNIQUE(spot_number), add UNIQUE(spot_number, user_id)
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'parking_spots_spot_number_key') THEN
+                        ALTER TABLE parking_spots DROP CONSTRAINT parking_spots_spot_number_key;
+                    END IF;
+                END $$
+            """)
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'parking_spots_spot_user_unique') THEN
+                        ALTER TABLE parking_spots ADD CONSTRAINT parking_spots_spot_user_unique UNIQUE (spot_number, user_id);
+                    END IF;
+                END $$
             """)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS messages (
@@ -77,6 +92,16 @@ class Database:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS moderators (
                     telegram_id BIGINT PRIMARY KEY
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(telegram_id),
+                    spot_number INTEGER NOT NULL,
+                    remind_at TIMESTAMPTZ NOT NULL,
+                    is_sent BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
 
@@ -162,10 +187,11 @@ class Database:
     # === Parking Spots ===
 
     async def add_spot(self, spot_number: int, user_id: int) -> bool:
-        """Assign spot to user. Returns False if spot already taken."""
+        """Assign spot to user. Returns False if this user already has this spot."""
         async with self.pool.acquire() as conn:
             existing = await conn.fetchrow(
-                "SELECT * FROM parking_spots WHERE spot_number = $1", spot_number
+                "SELECT * FROM parking_spots WHERE spot_number = $1 AND user_id = $2",
+                spot_number, user_id,
             )
             if existing:
                 return False
@@ -177,20 +203,33 @@ class Database:
             return True
 
     async def get_spot(self, spot_number: int):
+        """Get first parking_spots row for a spot (check if spot exists)."""
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(
                 "SELECT * FROM parking_spots WHERE spot_number = $1", spot_number
             )
 
-    async def get_spot_owner(self, spot_number: int):
-        """Get the user who owns a spot."""
+    async def get_spot_rows(self, spot_number: int):
+        """Get all parking_spots rows for a spot (multiple owners)."""
         async with self.pool.acquire() as conn:
-            return await conn.fetchrow(
+            return await conn.fetch(
+                "SELECT * FROM parking_spots WHERE spot_number = $1", spot_number
+            )
+
+    async def get_spot_owners(self, spot_number: int):
+        """Get all users who own a spot."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
                 """SELECT u.* FROM users u
                    JOIN parking_spots ps ON u.telegram_id = ps.user_id
                    WHERE ps.spot_number = $1""",
                 spot_number,
             )
+
+    async def get_spot_owner(self, spot_number: int):
+        """Get the first user who owns a spot (backward compat)."""
+        owners = await self.get_spot_owners(spot_number)
+        return owners[0] if owners else None
 
     async def get_user_spots(self, user_id: int):
         async with self.pool.acquire() as conn:
@@ -273,6 +312,57 @@ class Database:
                    WHERE m.to_spot = $1
                    ORDER BY m.created_at DESC LIMIT $2""",
                 spot_number, limit,
+            )
+
+    async def get_messages_for_user_spots(self, user_id: int, limit: int = 10):
+        """Get messages for all spots owned by a user."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """SELECT m.*, u.name as from_name FROM messages m
+                   LEFT JOIN users u ON m.from_user_id = u.telegram_id
+                   WHERE m.to_spot IN (
+                       SELECT spot_number FROM parking_spots WHERE user_id = $1
+                   )
+                   ORDER BY m.created_at DESC LIMIT $2""",
+                user_id, limit,
+            )
+
+    # === Reminders ===
+
+    async def add_reminder(self, user_id: int, spot_number: int, remind_at) -> int:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO reminders (user_id, spot_number, remind_at)
+                   VALUES ($1, $2, $3) RETURNING id""",
+                user_id, spot_number, remind_at,
+            )
+            return row["id"]
+
+    async def get_pending_reminders(self):
+        """Get reminders that are due and not yet sent."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """SELECT r.*, u.name as user_name FROM reminders r
+                   JOIN users u ON r.user_id = u.telegram_id
+                   WHERE r.is_sent = FALSE AND r.remind_at <= NOW()
+                   ORDER BY r.remind_at"""
+            )
+
+    async def mark_reminder_sent(self, reminder_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE reminders SET is_sent = TRUE WHERE id = $1",
+                reminder_id,
+            )
+
+    async def get_user_reminders(self, user_id: int):
+        """Get active (unsent) reminders for a user."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """SELECT * FROM reminders
+                   WHERE user_id = $1 AND is_sent = FALSE
+                   ORDER BY remind_at""",
+                user_id,
             )
 
     # === Guest Passes ===
@@ -365,6 +455,7 @@ class Database:
             guests = await conn.fetch("SELECT * FROM guest_passes")
             announcements = await conn.fetch("SELECT * FROM announcements")
             moderators = await conn.fetch("SELECT * FROM moderators")
+            reminders = await conn.fetch("SELECT * FROM reminders")
 
         def serialize(rows):
             result = []
@@ -384,6 +475,7 @@ class Database:
             "guest_passes": serialize(guests),
             "announcements": serialize(announcements),
             "moderators": serialize(moderators),
+            "reminders": serialize(reminders),
         }
         return json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -408,8 +500,8 @@ class Database:
                 await conn.execute(
                     """INSERT INTO parking_spots (spot_number, user_id, is_temporary_free, free_until, created_at)
                        VALUES ($1, $2, $3, $4, $5)
-                       ON CONFLICT (spot_number) DO UPDATE
-                       SET user_id = $2, is_temporary_free = $3, free_until = $4""",
+                       ON CONFLICT (spot_number, user_id) DO UPDATE
+                       SET is_temporary_free = $3, free_until = $4""",
                     s["spot_number"], s["user_id"], s["is_temporary_free"],
                     s.get("free_until"), s["created_at"],
                 )
@@ -454,5 +546,16 @@ class Database:
                     mod["telegram_id"],
                 )
             counts["moderators"] = len(data.get("moderators", []))
+
+            # Reminders
+            for r in data.get("reminders", []):
+                await conn.execute(
+                    """INSERT INTO reminders (user_id, spot_number, remind_at, is_sent, created_at)
+                       VALUES ($1, $2, $3, $4, $5)
+                       ON CONFLICT DO NOTHING""",
+                    r["user_id"], r["spot_number"], r["remind_at"],
+                    r["is_sent"], r["created_at"],
+                )
+            counts["reminders"] = len(data.get("reminders", []))
 
         return counts

@@ -16,16 +16,15 @@ RATE_LIMIT_PERIOD = 60  # seconds
 
 # Main menu buttons
 MENU_BUTTONS = {
-    "blocked": "🚫 Перегородили!",
-    "sos": "🚨 SOS Сигнализация",
-    "away": "🚗 Уезжаю / Вернулся",
-    "guest": "🎫 Гостевой пропуск",
+    "notify": "✉️ Сообщить А/М",
     "directory": "📋 Справочник мест",
     "my_spot": "📍 Моё место",
+    "history": "📨 История сообщений",
+    "reminder": "⏰ Напомнить об оплате",
     "add_spot": "➕ Добавить место",
     "remove_spot": "➖ Удалить место",
-    "help": "❓ Помощь",
     "contact_uk": "📞 Связь с УК",
+    "help": "❓ Помощь",
 }
 
 # User statuses
@@ -37,5 +36,4 @@ STATUS_BANNED = "banned"
 # Message sources
 SOURCE_GROUP = "group"
 SOURCE_PRIVATE = "private"
-SOURCE_BLOCKED = "blocked"
-SOURCE_SOS = "sos"
+SOURCE_NOTIFY = "notify"

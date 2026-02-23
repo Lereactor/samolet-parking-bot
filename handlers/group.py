@@ -63,35 +63,40 @@ async def handle_group_message(message: Message, db, **kwargs):
     if not message_text:
         message_text = "Обращение по поводу вашего места"
 
-    owner = await db.get_spot_owner(spot_number)
+    owners = await db.get_spot_owners(spot_number)
 
-    if not owner:
+    if not owners:
         await message.reply(f"Место {spot_number} не зарегистрировано в системе.")
         return
 
     # Save message
     from_user_id = message.from_user.id if message.from_user else None
     if from_user_id:
-        # Check if sender is registered
         sender = await db.get_user(from_user_id)
         if sender:
             await db.add_message(from_user_id, spot_number, message_text, SOURCE_GROUP)
 
-    # Notify owner via DM
+    # Notify all owners via DM
     sender_name = message.from_user.full_name if message.from_user else "Кто-то"
-    try:
-        await bot.send_message(
-            owner["telegram_id"],
-            f"💬 <b>Сообщение из группы</b>\n\n"
-            f"По поводу места <b>{spot_number}</b>:\n"
-            f"«{message_text}»\n\n"
-            f"От: {sender_name}",
-            parse_mode="HTML",
-        )
-        await message.reply(f"✅ Владелец места {spot_number} уведомлён.")
-    except Exception as e:
-        logger.error(f"Failed to DM owner of spot {spot_number}: {e}")
+    sent = 0
+    for owner in owners:
+        try:
+            await bot.send_message(
+                owner["telegram_id"],
+                f"💬 <b>Сообщение из группы</b>\n\n"
+                f"По поводу места <b>{spot_number}</b>:\n"
+                f"«{message_text}»\n\n"
+                f"От: {sender_name}",
+                parse_mode="HTML",
+            )
+            sent += 1
+        except Exception as e:
+            logger.error(f"Failed to DM owner of spot {spot_number}: {e}")
+
+    if sent > 0:
+        await message.reply(f"✅ Владелец(ы) места {spot_number} уведомлены.")
+    else:
         await message.reply(
-            f"⚠️ Не удалось уведомить владельца места {spot_number}. "
-            f"Возможно, он не начал диалог с ботом."
+            f"⚠️ Не удалось уведомить владельца(ев) места {spot_number}. "
+            f"Возможно, они не начали диалог с ботом."
         )
