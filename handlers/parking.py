@@ -123,10 +123,9 @@ async def notify_message(message: Message, state: FSMContext, db, **kwargs):
         try:
             await bot.send_message(
                 owner["telegram_id"],
-                f"✉️ <b>Сообщение от соседа</b>\n\n"
+                f"✉️ <b>Сообщение от А/М {sender_spot_text}</b>\n\n"
                 f"По поводу места <b>{spot_number}</b>:\n"
-                f"«{text}»\n\n"
-                f"От: {message.from_user.full_name} (место {sender_spot_text})",
+                f"«{text}»",
                 parse_mode="HTML",
             )
             sent += 1
@@ -376,11 +375,8 @@ async def directory_lookup(message: Message, state: FSMContext, db, **kwargs):
     if not owners:
         await message.answer(f"Место {spot_number} не зарегистрировано в системе.")
     else:
-        owner_names = ", ".join(o["name"] for o in owners)
-        count_text = f" ({len(owners)} владельцев)" if len(owners) > 1 else ""
         await message.answer(
-            f"🔵 Место <b>{spot_number}</b> — <b>занято</b>{count_text}\n"
-            f"Владелец(ы): {owner_names}",
+            f"🔵 Место <b>{spot_number}</b> — <b>занято</b>",
             parse_mode="HTML",
         )
 
