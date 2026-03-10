@@ -516,23 +516,30 @@ async def cmd_users(message: Message, db, is_admin: bool, **kwargs):
     if not is_admin:
         return
 
+    import html as html_module
     users = await db.get_all_users()
     if not users:
         await message.answer("Пользователей нет.")
         return
 
+    status_icon = {
+        "approved": "✅", "pending": "⏳", "rejected": "❌", "banned": "🚫"
+    }
     lines = ["<b>Пользователи:</b>\n"]
     for u in users:
         spots = await db.get_user_spots(u["telegram_id"])
         spot_nums = ", ".join(str(s["spot_number"]) for s in spots) if spots else "—"
-        status_icon = {
-            "approved": "✅", "pending": "⏳", "rejected": "❌", "banned": "🚫"
-        }.get(u["status"], "❓")
+        icon = status_icon.get(u["status"], "❓")
+        name = html_module.escape(u["name"] or "—")
+        username = html_module.escape(u["username"] or "—")
         lines.append(
-            f"{status_icon} {u['name']} | Места: {spot_nums} | @{u['username'] or '—'} | <code>{u['telegram_id']}</code>"
+            f"{icon} {name} | Места: {spot_nums} | @{username} | <code>{u['telegram_id']}</code>"
         )
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    # Split into chunks of max 4000 chars to avoid Telegram limit
+    text = "\n".join(lines)
+    for i in range(0, len(text), 4000):
+        await message.answer(text[i:i+4000], parse_mode="HTML")
 
 
 @router.message(Command("approve"), F.chat.type == "private")

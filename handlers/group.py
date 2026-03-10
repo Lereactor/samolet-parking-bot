@@ -17,7 +17,7 @@ _bot_username: str | None = None
 async def _get_bot_username(bot: Bot) -> str:
     global _bot_username
     if not _bot_username:
-        info = await bot.me()
+        info = await bot.get_me()
         _bot_username = info.username
     return _bot_username
 
@@ -69,8 +69,8 @@ async def handle_group_message(message: Message, db, **kwargs):
 
     # Check for reply to bot's message
     if not is_mentioned and message.reply_to_message and message.reply_to_message.from_user:
-        bot_info = await bot.get_me()
-        if message.reply_to_message.from_user.id == bot_info.id:
+        bot_id = (await bot.get_me()).id
+        if message.reply_to_message.from_user.id == bot_id:
             is_mentioned = True
 
     if not is_mentioned:
