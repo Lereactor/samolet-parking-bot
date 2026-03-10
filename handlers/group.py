@@ -97,9 +97,9 @@ async def handle_group_message(message: Message, db, **kwargs):
             try:
                 await bot.send_message(
                     message.from_user.id,
-                    f"✅ Владелец места {spot_number} уведомлён. Ответ придёт сюда.",
+                    f"✅ Уведомление отправлено владельцу места {spot_number}.",
                 )
-                await message.reply("✅ Ответ отправлен вам в личные сообщения.")
+                await message.reply("✅ Уведомление отправлено.")
             except Exception:
                 await message.reply(
                     f"✅ Владелец места {spot_number} уведомлён.\n"
