@@ -1,8 +1,7 @@
 import re
 import logging
 
-from aiogram import Router, F, Bot
-from aiogram.filters import Command
+from aiogram import Router, Bot
 from aiogram.types import Message
 
 from config import SOURCE_GROUP
@@ -11,18 +10,11 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-@router.message(Command("start"), F.chat.type.in_({"group", "supergroup"}))
-async def start_in_group(message: Message, **kwargs):
-    bot: Bot = message.bot
-    bot_info = await bot.get_me()
-    await message.reply(
-        f"👋 Для регистрации напишите боту в личные сообщения:\n"
-        f"👉 @{bot_info.username}"
-    )
-
-
-@router.message(F.chat.type.in_({"group", "supergroup"}))
+@router.message()
 async def handle_group_message(message: Message, db, **kwargs):
+    # Only handle group/supergroup messages
+    if message.chat.type not in ("group", "supergroup"):
+        return
     if not message.text:
         return
 
@@ -31,11 +23,11 @@ async def handle_group_message(message: Message, db, **kwargs):
         bot_info = await bot.get_me()
         bot_mention = f"@{bot_info.username}".lower()
 
-        # Check if bot is mentioned anywhere in the message (case-insensitive)
+        # Check if bot is mentioned
         if bot_mention not in message.text.lower():
             return
 
-        # Remove mention from text, find first number
+        # Remove mention, find spot number
         clean = message.text.lower().replace(bot_mention, "").strip()
         numbers = re.findall(r"\b(\d{1,4})\b", clean)
 
@@ -53,12 +45,12 @@ async def handle_group_message(message: Message, db, **kwargs):
             await message.reply(f"Место {spot_number} не зарегистрировано в системе.")
             return
 
-        # Remove the spot number from message text
+        # Build message text (remove spot number from clean text)
         message_text = re.sub(r"\b" + numbers[0] + r"\b", "", clean, count=1).strip()
         if not message_text:
             message_text = "Обращение по поводу вашего места"
 
-        # Log the message
+        # Log
         if message.from_user:
             sender = await db.get_user(message.from_user.id)
             if sender:
@@ -82,7 +74,10 @@ async def handle_group_message(message: Message, db, **kwargs):
                 logger.error(f"Failed to DM owner {owner['telegram_id']}: {e}")
 
         if sent == 0:
-            await message.reply(f"⚠️ Не удалось уведомить владельца места {spot_number}.")
+            await message.reply(
+                f"⚠️ Не удалось уведомить владельца места {spot_number}.\n"
+                f"Владелец должен написать боту /start в личные сообщения."
+            )
             return
 
         # Try DM to sender, fallback to group reply
