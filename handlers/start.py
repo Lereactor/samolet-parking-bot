@@ -88,7 +88,7 @@ async def cmd_start_group(message: Message, **kwargs):
 
 # === /start (private only) ===
 
-@router.message(Command("start"), F.chat.type == "private")
+@router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, is_moderator: bool, user_status: str, **kwargs):
     await state.clear()
 
@@ -480,9 +480,9 @@ async def reject_user(callback: CallbackQuery, db, is_moderator: bool, **kwargs)
 
 # === Admin commands ===
 
-@router.message(Command("pending"), F.chat.type == "private")
+@router.message(Command("pending"))
 async def cmd_pending(message: Message, db, is_moderator: bool, **kwargs):
-    if not is_moderator:
+    if message.chat.type != "private" or not is_moderator:
         return
 
     pending = await db.get_users_by_status("pending")
@@ -511,9 +511,9 @@ async def cmd_pending(message: Message, db, is_moderator: bool, **kwargs):
         )
 
 
-@router.message(Command("users"), F.chat.type == "private")
+@router.message(Command("users"))
 async def cmd_users(message: Message, db, is_admin: bool, **kwargs):
-    if not is_admin:
+    if message.chat.type != "private" or not is_admin:
         return
 
     import html as html_module
@@ -542,10 +542,10 @@ async def cmd_users(message: Message, db, is_admin: bool, **kwargs):
         await message.answer(text[i:i+4000], parse_mode="HTML")
 
 
-@router.message(Command("approve"), F.chat.type == "private")
+@router.message(Command("approve"))
 async def cmd_approve(message: Message, db, is_admin: bool, **kwargs):
     """/approve <user_id> — force-approve any user (admin only)."""
-    if not is_admin:
+    if message.chat.type != "private" or not is_admin:
         return
 
     parts = message.text.strip().split()
@@ -586,9 +586,9 @@ async def cmd_approve(message: Message, db, is_admin: bool, **kwargs):
         await message.answer(f"⚠️ Не удалось отправить уведомление пользователю (возможно, не начал диалог с ботом).")
 
 
-@router.message(Command("stats"), F.chat.type == "private")
+@router.message(Command("stats"))
 async def cmd_stats(message: Message, db, is_admin: bool, **kwargs):
-    if not is_admin:
+    if message.chat.type != "private" or not is_admin:
         return
 
     stats = await db.get_stats()
@@ -602,9 +602,9 @@ async def cmd_stats(message: Message, db, is_admin: bool, **kwargs):
     )
 
 
-@router.message(Command("backup"), F.chat.type == "private")
+@router.message(Command("backup"))
 async def cmd_backup(message: Message, db, is_admin: bool, **kwargs):
-    if not is_admin:
+    if message.chat.type != "private" or not is_admin:
         return
 
     data = await db.export_all_data()
@@ -614,9 +614,9 @@ async def cmd_backup(message: Message, db, is_admin: bool, **kwargs):
     await message.answer_document(file, caption="📦 Полный бэкап базы данных")
 
 
-@router.message(Command("restore"), F.chat.type == "private")
+@router.message(Command("restore"))
 async def cmd_restore(message: Message, state: FSMContext, is_admin: bool, **kwargs):
-    if not is_admin:
+    if message.chat.type != "private" or not is_admin:
         return
 
     await message.answer("Отправьте JSON-файл бэкапа:")
@@ -625,7 +625,7 @@ async def cmd_restore(message: Message, state: FSMContext, is_admin: bool, **kwa
 
 @router.message(BackupState.waiting_for_file, F.document)
 async def restore_file(message: Message, state: FSMContext, db, is_admin: bool, **kwargs):
-    if not is_admin:
+    if message.chat.type != "private" or not is_admin:
         return
 
     bot: Bot = message.bot
@@ -924,10 +924,10 @@ async def remove_spot_number(message: Message, state: FSMContext, db, **kwargs):
 
 # === Admin: manage spots for any user ===
 
-@router.message(Command("spot"), F.chat.type == "private")
+@router.message(Command("spot"))
 async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: bool, **kwargs):
     """Staff command: /spot add/remove/info/force"""
-    if not is_moderator:
+    if message.chat.type != "private" or not is_moderator:
         return
 
     parts = message.text.strip().split()
@@ -1033,10 +1033,10 @@ async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: 
 
 # === Admin: manage moderators ===
 
-@router.message(Command("mod"), F.chat.type == "private")
+@router.message(Command("mod"))
 async def cmd_mod(message: Message, db, is_admin: bool, **kwargs):
     """/mod add <user_id>, /mod remove <user_id>, /mod list"""
-    if not is_admin:
+    if message.chat.type != "private" or not is_admin:
         return
 
     parts = message.text.strip().split()

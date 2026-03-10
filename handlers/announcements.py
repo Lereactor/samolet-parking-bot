@@ -14,9 +14,9 @@ class AnnounceState(StatesGroup):
     waiting_for_text = State()
 
 
-@router.message(Command("announce"), F.chat.type == "private")
+@router.message(Command("announce"))
 async def cmd_announce(message: Message, state: FSMContext, is_moderator: bool, **kwargs):
-    if not is_moderator:
+    if message.chat.type != "private" or not is_moderator:
         return
 
     await message.answer(
@@ -27,7 +27,7 @@ async def cmd_announce(message: Message, state: FSMContext, is_moderator: bool, 
 
 @router.message(AnnounceState.waiting_for_text)
 async def announce_text(message: Message, state: FSMContext, db, is_moderator: bool, **kwargs):
-    if not is_moderator:
+    if message.chat.type != "private" or not is_moderator:
         return
 
     text = message.text.strip()
