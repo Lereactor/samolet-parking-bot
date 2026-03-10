@@ -97,3 +97,27 @@ a233c09 Detailed help text for users and admin section
 | `handlers/start.py` | Изменён |
 | `handlers/group.py` | Изменён |
 | `handlers/guest.py` | Удалён |
+
+## 2026-03-10 — Session 6: Исправление 6 проблем
+
+### Проблемы и решения
+
+| # | Проблема | Решение |
+|---|----------|---------|
+| 1 | Нет кнопки "Назад" — бот залипает в FSM | Добавлен глобальный `cancel_handler` + кнопка `❌ Отмена` во все FSM-диалоги |
+| 2 | Отклонённые не могут повторно подать заявку | `cmd_start` теперь запускает регистрацию заново; добавлен `set_user_status("pending")` после re-submit |
+| 3 | Нужно починить user 901369873 | Добавлена команда `/approve <user_id>` для admin — force-approve + отправка меню |
+| 4 | Бот в группе реагирует на /start без @упоминания | Все приватные хендлеры получили `F.chat.type == "private"`; группа — отдельный redirect handler |
+| 5 | @mention в группе не работал | Исправлена case-insensitive проверка; кэш bot_username; DM подтверждение отправителю + fallback в группу |
+| 6 | Обновление меню не доходит до старых пользователей | Таблица `bot_settings`, `BOT_VERSION = "2.2"`, `startup_broadcast` при старте если версия изменилась |
+
+### Изменения по файлам
+| Файл | Что изменилось |
+|------|---------------|
+| `config.py` | `BOT_VERSION = "2.2"`, `CANCEL_TEXT = "❌ Отмена"` |
+| `services/database.py` | Таблица `bot_settings`, методы `get_setting`/`set_setting` |
+| `bot.py` | `startup_broadcast()` — рассылка при смене версии |
+| `handlers/start.py` | Приватный фильтр, cancel handler, /approve, rejected→re-register, cancel keyboard |
+| `handlers/parking.py` | Приватный фильтр, cancel keyboard во всех FSM, return main_menu_keyboard |
+| `handlers/announcements.py` | Приватный фильтр |
+| `handlers/group.py` | Кэш bot_username, case-insensitive @mention, DM sender + fallback, /start redirect |

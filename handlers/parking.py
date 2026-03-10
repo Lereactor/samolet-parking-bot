@@ -4,9 +4,9 @@ from datetime import datetime, timezone, timedelta
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
-from config import MENU_BUTTONS, SOURCE_NOTIFY
+from config import MENU_BUTTONS, SOURCE_NOTIFY, CANCEL_TEXT
 
 UK_PHONE = "+78007752411"
 
@@ -32,9 +32,33 @@ class DirectoryState(StatesGroup):
     waiting_for_spot = State()
 
 
+def cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=CANCEL_TEXT)]],
+        resize_keyboard=True,
+    )
+
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=MENU_BUTTONS["notify"]),
+             KeyboardButton(text=MENU_BUTTONS["directory"])],
+            [KeyboardButton(text=MENU_BUTTONS["my_spot"]),
+             KeyboardButton(text=MENU_BUTTONS["history"])],
+            [KeyboardButton(text=MENU_BUTTONS["reminder"]),
+             KeyboardButton(text=MENU_BUTTONS["add_spot"])],
+            [KeyboardButton(text=MENU_BUTTONS["remove_spot"]),
+             KeyboardButton(text=MENU_BUTTONS["contact_uk"])],
+            [KeyboardButton(text=MENU_BUTTONS["help"])],
+        ],
+        resize_keyboard=True,
+    )
+
+
 # === My Spot ===
 
-@router.message(F.text == MENU_BUTTONS["my_spot"])
+@router.message(F.text == MENU_BUTTONS["my_spot"], F.chat.type == "private")
 async def my_spot(message: Message, db, is_approved: bool, **kwargs):
     if not is_approved:
         await message.answer("Вы не зарегистрированы. Используйте /start")
@@ -56,12 +80,12 @@ async def my_spot(message: Message, db, is_approved: bool, **kwargs):
             co_info = f" (совладельцы: {co_names})"
         lines.append(f"Место <b>{s['spot_number']}</b>{co_info}")
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=main_menu_keyboard())
 
 
 # === Notify (Сообщить А/М) ===
 
-@router.message(F.text == MENU_BUTTONS["notify"])
+@router.message(F.text == MENU_BUTTONS["notify"], F.chat.type == "private")
 async def notify_start(message: Message, state: FSMContext, is_approved: bool, **kwargs):
     if not is_approved:
         await message.answer("Вы не зарегистрированы. Используйте /start")
@@ -71,6 +95,7 @@ async def notify_start(message: Message, state: FSMContext, is_approved: bool, *
         "✉️ <b>Сообщить авто/мото</b>\n\n"
         "Введите номер места, владельцу которого хотите написать:",
         parse_mode="HTML",
+        reply_markup=cancel_keyboard(),
     )
     await state.set_state(NotifyState.waiting_for_spot)
 
@@ -79,7 +104,10 @@ async def notify_start(message: Message, state: FSMContext, is_approved: bool, *
 async def notify_spot(message: Message, state: FSMContext, db, **kwargs):
     text = message.text.strip()
     if not text.isdigit():
-        await message.answer("Введите номер места как число:")
+        await message.answer(
+            "Введите номер места как число:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     spot_number = int(text)
@@ -88,13 +116,16 @@ async def notify_spot(message: Message, state: FSMContext, db, **kwargs):
     if not owners:
         await message.answer(
             f"Место {spot_number} не зарегистрировано в системе.\n"
-            "Попробуйте другой номер или отмените: /start"
+            "Попробуйте другой номер или нажмите «Отмена».",
+            reply_markup=cancel_keyboard(),
         )
-        await state.clear()
         return
 
     await state.update_data(spot_number=spot_number)
-    await message.answer("Введите текст сообщения для владельца(ев) места:")
+    await message.answer(
+        "Введите текст сообщения для владельца(ев) места:",
+        reply_markup=cancel_keyboard(),
+    )
     await state.set_state(NotifyState.waiting_for_message)
 
 
@@ -102,7 +133,10 @@ async def notify_spot(message: Message, state: FSMContext, db, **kwargs):
 async def notify_message(message: Message, state: FSMContext, db, **kwargs):
     text = message.text.strip()
     if len(text) < 2:
-        await message.answer("Сообщение слишком короткое. Минимум 2 символа:")
+        await message.answer(
+            "Сообщение слишком короткое. Минимум 2 символа:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     data = await state.get_data()
@@ -134,11 +168,15 @@ async def notify_message(message: Message, state: FSMContext, db, **kwargs):
 
     if sent > 0:
         owner_word = "владелец" if sent == 1 else f"владельцы ({sent})"
-        await message.answer(f"✅ {owner_word.capitalize()} места {spot_number} уведомлён(ы)!")
+        await message.answer(
+            f"✅ {owner_word.capitalize()} места {spot_number} уведомлён(ы)!",
+            reply_markup=main_menu_keyboard(),
+        )
     else:
         await message.answer(
             f"⚠️ Не удалось отправить уведомление владельцу(ам) места {spot_number}. "
-            f"Возможно, они заблокировали бота."
+            f"Возможно, они заблокировали бота.",
+            reply_markup=main_menu_keyboard(),
         )
 
     await state.clear()
@@ -146,7 +184,7 @@ async def notify_message(message: Message, state: FSMContext, db, **kwargs):
 
 # === History (История сообщений) ===
 
-@router.message(F.text == MENU_BUTTONS["history"])
+@router.message(F.text == MENU_BUTTONS["history"], F.chat.type == "private")
 async def history_start(message: Message, state: FSMContext, db, is_approved: bool, **kwargs):
     if not is_approved:
         await message.answer("Вы не зарегистрированы. Используйте /start")
@@ -170,6 +208,7 @@ async def history_start(message: Message, state: FSMContext, db, is_approved: bo
         f"Введите номер места для просмотра истории\n"
         f"или напишите <b>все</b> для всех мест:",
         parse_mode="HTML",
+        reply_markup=cancel_keyboard(),
     )
     await state.set_state(HistoryState.waiting_for_spot)
 
@@ -185,7 +224,10 @@ async def history_spot(message: Message, state: FSMContext, db, **kwargs):
         return
 
     if not text.isdigit():
-        await message.answer("Введите номер места как число или «все»:")
+        await message.answer(
+            "Введите номер места как число или «все»:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     spot_number = int(text)
@@ -193,7 +235,10 @@ async def history_spot(message: Message, state: FSMContext, db, **kwargs):
     spots = await db.get_user_spots(message.from_user.id)
     user_spot_nums = [s["spot_number"] for s in spots]
     if spot_number not in user_spot_nums:
-        await message.answer(f"Это не ваше место. Ваши: {', '.join(str(n) for n in user_spot_nums)}")
+        await message.answer(
+            f"Это не ваше место. Ваши: {', '.join(str(n) for n in user_spot_nums)}",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     await _show_history(message, db, spot_number)
@@ -207,7 +252,10 @@ async def _show_history(message: Message, db, spot_number: int):
 
 async def _format_history(message: Message, messages_list, label: str):
     if not messages_list:
-        await message.answer(f"Нет сообщений по {label}.")
+        await message.answer(
+            f"Нет сообщений по {label}.",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
     lines = [f"📨 <b>Последние сообщения по {label}:</b>\n"]
@@ -220,12 +268,12 @@ async def _format_history(message: Message, messages_list, label: str):
             f"   {m['message_text']}"
         )
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=main_menu_keyboard())
 
 
 # === Reminder (Напомнить об оплате) ===
 
-@router.message(F.text == MENU_BUTTONS["reminder"])
+@router.message(F.text == MENU_BUTTONS["reminder"], F.chat.type == "private")
 async def reminder_start(message: Message, state: FSMContext, db, is_approved: bool, **kwargs):
     if not is_approved:
         await message.answer("Вы не зарегистрированы. Используйте /start")
@@ -255,6 +303,7 @@ async def reminder_start(message: Message, state: FSMContext, db, is_approved: b
             f"<b>ДД.ММ.ГГГГ ЧЧ:ММ</b> (время московское)\n\n"
             f"Например: <b>15.03.2026 10:00</b>",
             parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
         )
         await state.set_state(ReminderState.waiting_for_datetime)
     else:
@@ -264,6 +313,7 @@ async def reminder_start(message: Message, state: FSMContext, db, is_approved: b
             f"Ваши места: {spots_text}\n"
             f"Введите номер места:",
             parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
         )
         await state.set_state(ReminderState.selecting_spot)
 
@@ -272,7 +322,10 @@ async def reminder_start(message: Message, state: FSMContext, db, is_approved: b
 async def reminder_select_spot(message: Message, state: FSMContext, db, **kwargs):
     text = message.text.strip()
     if not text.isdigit():
-        await message.answer("Введите номер места как число:")
+        await message.answer(
+            "Введите номер места как число:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     spot_number = int(text)
@@ -280,7 +333,10 @@ async def reminder_select_spot(message: Message, state: FSMContext, db, **kwargs
     user_spot_nums = [s["spot_number"] for s in spots]
 
     if spot_number not in user_spot_nums:
-        await message.answer(f"Это не ваше место. Ваши: {', '.join(str(n) for n in user_spot_nums)}")
+        await message.answer(
+            f"Это не ваше место. Ваши: {', '.join(str(n) for n in user_spot_nums)}",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     await state.update_data(spot_number=spot_number)
@@ -290,6 +346,7 @@ async def reminder_select_spot(message: Message, state: FSMContext, db, **kwargs
         f"<b>ДД.ММ.ГГГГ ЧЧ:ММ</b> (время московское)\n\n"
         f"Например: <b>15.03.2026 10:00</b>",
         parse_mode="HTML",
+        reply_markup=cancel_keyboard(),
     )
     await state.set_state(ReminderState.waiting_for_datetime)
 
@@ -309,11 +366,15 @@ async def reminder_datetime(message: Message, state: FSMContext, db, **kwargs):
             "Неверный формат. Используйте <b>ДД.ММ.ГГГГ ЧЧ:ММ</b>\n"
             "Например: <b>15.03.2026 10:00</b>",
             parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
         )
         return
 
     if dt_utc <= datetime.now(timezone.utc):
-        await message.answer("Дата должна быть в будущем. Попробуйте ещё:")
+        await message.answer(
+            "Дата должна быть в будущем. Попробуйте ещё:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     data = await state.get_data()
@@ -327,13 +388,14 @@ async def reminder_datetime(message: Message, state: FSMContext, db, **kwargs):
         f"Когда: {dt_msk.strftime('%d.%m.%Y %H:%M')} МСК\n"
         f"Номер: #{reminder_id}",
         parse_mode="HTML",
+        reply_markup=main_menu_keyboard(),
     )
     await state.clear()
 
 
 # === Directory ===
 
-@router.message(F.text == MENU_BUTTONS["directory"])
+@router.message(F.text == MENU_BUTTONS["directory"], F.chat.type == "private")
 async def directory_start(message: Message, state: FSMContext, db, is_approved: bool, **kwargs):
     if not is_approved:
         await message.answer("Вы не зарегистрированы. Используйте /start")
@@ -357,7 +419,7 @@ async def directory_start(message: Message, state: FSMContext, db, is_approved: 
             "Введите номер места для проверки.",
         ]
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=cancel_keyboard())
     await state.set_state(DirectoryState.waiting_for_spot)
 
 
@@ -366,18 +428,25 @@ async def directory_lookup(message: Message, state: FSMContext, db, **kwargs):
     text = message.text.strip()
 
     if not text.isdigit():
-        await message.answer("Введите номер места как число:")
+        await message.answer(
+            "Введите номер места как число:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     spot_number = int(text)
     owners = await db.get_spot_owners(spot_number)
 
     if not owners:
-        await message.answer(f"Место {spot_number} не зарегистрировано в системе.")
+        await message.answer(
+            f"Место {spot_number} не зарегистрировано в системе.",
+            reply_markup=main_menu_keyboard(),
+        )
     else:
         await message.answer(
             f"🔵 Место <b>{spot_number}</b> — <b>занято</b>",
             parse_mode="HTML",
+            reply_markup=main_menu_keyboard(),
         )
 
     await state.clear()
@@ -385,18 +454,19 @@ async def directory_lookup(message: Message, state: FSMContext, db, **kwargs):
 
 # === Contact UK ===
 
-@router.message(F.text == MENU_BUTTONS["contact_uk"])
+@router.message(F.text == MENU_BUTTONS["contact_uk"], F.chat.type == "private")
 async def contact_uk(message: Message, **kwargs):
     await message.answer(
         f"📞 <b>Управляющая компания</b>\n\n"
         f"Телефон: {UK_PHONE}",
         parse_mode="HTML",
+        reply_markup=main_menu_keyboard(),
     )
 
 
 # === Help ===
 
-@router.message(F.text == MENU_BUTTONS["help"])
+@router.message(F.text == MENU_BUTTONS["help"], F.chat.type == "private")
 async def show_help(message: Message, db, is_approved: bool, is_admin: bool, is_moderator: bool, **kwargs):
     text = (
         "🅿️ <b>Parking Bot — Помощь</b>\n\n"
@@ -466,7 +536,8 @@ async def show_help(message: Message, db, is_approved: bool, is_admin: bool, is_
             "/users — все пользователи, их статусы и места\n"
             "/stats — статистика\n"
             "/backup — скачать полный бэкап БД (JSON)\n"
-            "/restore — загрузить бэкап для восстановления\n\n"
+            "/restore — загрузить бэкап для восстановления\n"
+            "/approve UserID — одобрить пользователя вручную\n\n"
 
             "👥 <b>Управление модераторами:</b>\n"
             "<code>/mod add UserID</code> — назначить модератора\n"
@@ -474,4 +545,4 @@ async def show_help(message: Message, db, is_approved: bool, is_admin: bool, is_
             "<code>/mod list</code> — список модераторов\n"
         )
 
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(text, parse_mode="HTML", reply_markup=main_menu_keyboard())

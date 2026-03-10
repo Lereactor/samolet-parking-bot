@@ -116,6 +116,35 @@ async def reminders_loop(bot: Bot, db: Database):
             logger.error(f"Reminders loop error: {e}")
 
 
+# === Startup broadcast ===
+
+async def startup_broadcast(bot: Bot, db: Database):
+    """Send updated menu to all approved users when BOT_VERSION changes."""
+    from handlers.start import main_menu_keyboard
+    from config import BOT_VERSION
+
+    last_version = await db.get_setting("last_broadcast_version")
+    if last_version == BOT_VERSION:
+        return
+
+    users = await db.get_all_approved_users()
+    sent = 0
+    for user in users:
+        try:
+            await bot.send_message(
+                user["telegram_id"],
+                "🔄 <b>Бот обновлён!</b>\n\nМеню обновлено — все функции доступны через кнопки ниже.",
+                parse_mode="HTML",
+                reply_markup=main_menu_keyboard(),
+            )
+            sent += 1
+        except Exception as e:
+            logger.warning(f"Startup broadcast failed for {user['telegram_id']}: {e}")
+
+    await db.set_setting("last_broadcast_version", BOT_VERSION)
+    logger.info(f"Startup broadcast done: {sent} users notified (version {BOT_VERSION})")
+
+
 # === Main ===
 
 async def main():
@@ -156,6 +185,7 @@ async def main():
     asyncio.create_task(auto_backup_loop(bot, db))
     asyncio.create_task(cleanup_loop(db))
     asyncio.create_task(reminders_loop(bot, db))
+    asyncio.create_task(startup_broadcast(bot, db))
 
     logger.info("Bot is running!")
 

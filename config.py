@@ -14,6 +14,12 @@ ADMIN_ID: int = int(_admin_str) if _admin_str and _admin_str.strip().isdigit() e
 RATE_LIMIT_MESSAGES = 10
 RATE_LIMIT_PERIOD = 60  # seconds
 
+# Bot version — bump to broadcast updated menu to all users on next deploy
+BOT_VERSION = "2.2"
+
+# Cancel button text (used in FSM dialogs)
+CANCEL_TEXT = "❌ Отмена"
+
 # Main menu buttons
 MENU_BUTTONS = {
     "notify": "✉️ Сообщить А/М",

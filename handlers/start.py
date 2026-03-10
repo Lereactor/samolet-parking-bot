@@ -9,9 +9,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile,
+    ReplyKeyboardRemove,
 )
 
-from config import MENU_BUTTONS
+from config import MENU_BUTTONS, CANCEL_TEXT
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -55,9 +56,39 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-# === /start ===
+def cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=CANCEL_TEXT)]],
+        resize_keyboard=True,
+    )
 
-@router.message(Command("start"))
+
+# === Global cancel handler (must be registered before FSM handlers) ===
+
+@router.message(F.text == CANCEL_TEXT, F.chat.type == "private")
+async def cancel_handler(message: Message, state: FSMContext, is_approved: bool, **kwargs):
+    await state.clear()
+    if is_approved:
+        await message.answer("Главное меню.", reply_markup=main_menu_keyboard())
+    else:
+        await message.answer("Действие отменено.", reply_markup=ReplyKeyboardRemove())
+
+
+# === /start in group — redirect to DM ===
+
+@router.message(Command("start"), F.chat.type.in_({"group", "supergroup"}))
+async def cmd_start_group(message: Message, **kwargs):
+    bot: Bot = message.bot
+    bot_info = await bot.me()
+    await message.reply(
+        f"👋 Для регистрации и работы с ботом напишите мне в личные сообщения:\n"
+        f"👉 @{bot_info.username}"
+    )
+
+
+# === /start (private only) ===
+
+@router.message(Command("start"), F.chat.type == "private")
 async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, is_moderator: bool, user_status: str, **kwargs):
     await state.clear()
 
@@ -97,7 +128,12 @@ async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, is_
         return
 
     if user_status == "rejected":
-        await message.answer("❌ Ваша заявка была отклонена.")
+        await message.answer(
+            "❌ Ваша заявка была отклонена.\n\n"
+            "Вы можете подать повторную заявку. Введите ваше имя (как к вам обращаться):",
+            reply_markup=cancel_keyboard(),
+        )
+        await state.set_state(RegistrationState.waiting_for_name)
         return
 
     if user_status == "banned":
@@ -109,6 +145,7 @@ async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, is_
         "🅿️ <b>Parking Bot — парковка ЖК</b>\n\n"
         "Для регистрации введите ваше имя (как к вам обращаться):",
         parse_mode="HTML",
+        reply_markup=cancel_keyboard(),
     )
     await state.set_state(RegistrationState.waiting_for_name)
 
@@ -117,7 +154,10 @@ async def cmd_start(message: Message, state: FSMContext, db, is_admin: bool, is_
 async def registration_name(message: Message, state: FSMContext, **kwargs):
     name = message.text.strip()
     if len(name) < 2 or len(name) > 50:
-        await message.answer("Имя должно быть от 2 до 50 символов. Попробуйте ещё:")
+        await message.answer(
+            "Имя должно быть от 2 до 50 символов. Попробуйте ещё:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     await state.update_data(name=name, spots=[])
@@ -126,6 +166,7 @@ async def registration_name(message: Message, state: FSMContext, **kwargs):
         f"Можно добавить несколько — вводите по одному.\n"
         f"Когда закончите, отправьте <b>готово</b>.",
         parse_mode="HTML",
+        reply_markup=cancel_keyboard(),
     )
     await state.set_state(RegistrationState.waiting_for_spot)
 
@@ -141,7 +182,10 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
         spots = data.get("spots", [])
 
         if not spots:
-            await message.answer("Вы не добавили ни одного места. Введите номер места:")
+            await message.answer(
+                "Вы не добавили ни одного места. Введите номер места:",
+                reply_markup=cancel_keyboard(),
+            )
             return
 
         # Save user
@@ -184,12 +228,15 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
                     reply_markup=main_menu_keyboard(),
                 )
         else:
+            # Explicitly set to pending (covers re-registration after rejection)
+            await db.set_user_status(message.from_user.id, "pending")
             await state.clear()
             await message.answer(
                 f"✅ Заявка отправлена!\n\n"
                 f"Имя: {name}\n"
                 f"Места: {spots_text}\n\n"
-                f"Ожидайте одобрения администратором."
+                f"Ожидайте одобрения администратором.",
+                reply_markup=ReplyKeyboardRemove(),
             )
             # Check for conflicts
             conflicts = data.get("conflicts", [])
@@ -248,18 +295,29 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
 
     # Add a spot number
     if not text.isdigit():
-        await message.answer("Введите номер места как число (например: 142) или <b>готово</b>:", parse_mode="HTML")
+        await message.answer(
+            "Введите номер места как число (например: 142) или <b>готово</b>:",
+            parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     spot_number = int(text)
     if spot_number < 1 or spot_number > 9999:
-        await message.answer("Номер места должен быть от 1 до 9999:")
+        await message.answer(
+            "Номер места должен быть от 1 до 9999:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     data = await state.get_data()
     spots = data.get("spots", [])
     if spot_number in spots:
-        await message.answer(f"Место {spot_number} уже в вашем списке. Введите другой номер или <b>готово</b>:", parse_mode="HTML")
+        await message.answer(
+            f"Место {spot_number} уже в вашем списке. Введите другой номер или <b>готово</b>:",
+            parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     # Check if spot is already taken by someone else
@@ -276,18 +334,20 @@ async def registration_spot(message: Message, state: FSMContext, db, is_admin: b
             f"Место добавлено в заявку — решение примет администрация.\n\n"
             f"Введите ещё номер или отправьте <b>готово</b>.",
             parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
         )
     else:
         await message.answer(
             f"✅ Место {spot_number} добавлено.\n\n"
             f"Введите ещё номер или отправьте <b>готово</b>.",
             parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
         )
 
     spots.append(spot_number)
     await state.update_data(spots=spots)
     all_spots_text = ", ".join(str(s) for s in spots)
-    await message.answer(f"Ваши места: {all_spots_text}", parse_mode="HTML")
+    await message.answer(f"Ваши места: {all_spots_text}", reply_markup=cancel_keyboard())
 
 
 # === Admin: approve/reject ===
@@ -407,7 +467,11 @@ async def reject_user(callback: CallbackQuery, db, is_moderator: bool, **kwargs)
 
     try:
         bot: Bot = callback.bot
-        await bot.send_message(user_id, "❌ Ваша заявка отклонена администратором.")
+        await bot.send_message(
+            user_id,
+            "❌ Ваша заявка отклонена администратором.\n\n"
+            "Если считаете это ошибкой, напишите /start для повторной заявки."
+        )
     except Exception as e:
         logger.error(f"Failed to notify user {user_id}: {e}")
 
@@ -416,7 +480,7 @@ async def reject_user(callback: CallbackQuery, db, is_moderator: bool, **kwargs)
 
 # === Admin commands ===
 
-@router.message(Command("pending"))
+@router.message(Command("pending"), F.chat.type == "private")
 async def cmd_pending(message: Message, db, is_moderator: bool, **kwargs):
     if not is_moderator:
         return
@@ -447,7 +511,7 @@ async def cmd_pending(message: Message, db, is_moderator: bool, **kwargs):
         )
 
 
-@router.message(Command("users"))
+@router.message(Command("users"), F.chat.type == "private")
 async def cmd_users(message: Message, db, is_admin: bool, **kwargs):
     if not is_admin:
         return
@@ -465,13 +529,57 @@ async def cmd_users(message: Message, db, is_admin: bool, **kwargs):
             "approved": "✅", "pending": "⏳", "rejected": "❌", "banned": "🚫"
         }.get(u["status"], "❓")
         lines.append(
-            f"{status_icon} {u['name']} | Места: {spot_nums} | @{u['username'] or '—'}"
+            f"{status_icon} {u['name']} | Места: {spot_nums} | @{u['username'] or '—'} | <code>{u['telegram_id']}</code>"
         )
 
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
-@router.message(Command("stats"))
+@router.message(Command("approve"), F.chat.type == "private")
+async def cmd_approve(message: Message, db, is_admin: bool, **kwargs):
+    """/approve <user_id> — force-approve any user (admin only)."""
+    if not is_admin:
+        return
+
+    parts = message.text.strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer(
+            "Использование: <code>/approve UserID</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    user_id = int(parts[1])
+    user = await db.get_user(user_id)
+    if not user:
+        await message.answer(f"Пользователь <code>{user_id}</code> не найден в БД.", parse_mode="HTML")
+        return
+
+    await db.set_user_status(user_id, "approved")
+    spots = await db.get_user_spots(user_id)
+    spots_text = ", ".join(str(s["spot_number"]) for s in spots) if spots else "нет"
+
+    await message.answer(
+        f"✅ Пользователь <b>{user['name']}</b> (<code>{user_id}</code>) одобрен.\n"
+        f"Места: {spots_text}",
+        parse_mode="HTML",
+    )
+
+    # Notify the user
+    try:
+        bot: Bot = message.bot
+        await bot.send_message(
+            user_id,
+            "🎉 Ваша заявка одобрена!\n\n"
+            "Используйте меню для управления парковкой.",
+            reply_markup=main_menu_keyboard(),
+        )
+    except Exception as e:
+        logger.warning(f"Could not notify user {user_id}: {e}")
+        await message.answer(f"⚠️ Не удалось отправить уведомление пользователю (возможно, не начал диалог с ботом).")
+
+
+@router.message(Command("stats"), F.chat.type == "private")
 async def cmd_stats(message: Message, db, is_admin: bool, **kwargs):
     if not is_admin:
         return
@@ -487,7 +595,7 @@ async def cmd_stats(message: Message, db, is_admin: bool, **kwargs):
     )
 
 
-@router.message(Command("backup"))
+@router.message(Command("backup"), F.chat.type == "private")
 async def cmd_backup(message: Message, db, is_admin: bool, **kwargs):
     if not is_admin:
         return
@@ -499,7 +607,7 @@ async def cmd_backup(message: Message, db, is_admin: bool, **kwargs):
     await message.answer_document(file, caption="📦 Полный бэкап базы данных")
 
 
-@router.message(Command("restore"))
+@router.message(Command("restore"), F.chat.type == "private")
 async def cmd_restore(message: Message, state: FSMContext, is_admin: bool, **kwargs):
     if not is_admin:
         return
@@ -635,13 +743,16 @@ async def spotconflict_reject(callback: CallbackQuery, db, is_moderator: bool, *
 
 # === Add spot (for approved users) ===
 
-@router.message(F.text == MENU_BUTTONS["add_spot"])
+@router.message(F.text == MENU_BUTTONS["add_spot"], F.chat.type == "private")
 async def add_spot_start(message: Message, state: FSMContext, is_approved: bool, **kwargs):
     if not is_approved:
         await message.answer("Вы не зарегистрированы. Используйте /start")
         return
 
-    await message.answer("Введите номер нового парковочного места:")
+    await message.answer(
+        "Введите номер нового парковочного места:",
+        reply_markup=cancel_keyboard(),
+    )
     await state.set_state(AddSpotState.waiting_for_spot)
 
 
@@ -649,18 +760,27 @@ async def add_spot_start(message: Message, state: FSMContext, is_approved: bool,
 async def add_spot_number(message: Message, state: FSMContext, db, is_moderator: bool, **kwargs):
     text = message.text.strip()
     if not text.isdigit():
-        await message.answer("Введите номер места как число:")
+        await message.answer(
+            "Введите номер места как число:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     spot_number = int(text)
     if spot_number < 1 or spot_number > 9999:
-        await message.answer("Номер места должен быть от 1 до 9999:")
+        await message.answer(
+            "Номер места должен быть от 1 до 9999:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     # Check if user already has this spot
     user_spots = await db.get_user_spots(message.from_user.id)
     if any(s["spot_number"] == spot_number for s in user_spots):
-        await message.answer(f"Место {spot_number} уже принадлежит вам.")
+        await message.answer(
+            f"Место {spot_number} уже принадлежит вам.",
+            reply_markup=main_menu_keyboard(),
+        )
         await state.clear()
         return
 
@@ -672,7 +792,8 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_moderator:
         spots = await db.get_user_spots(message.from_user.id)
         spots_text = ", ".join(str(s["spot_number"]) for s in spots)
         await message.answer(
-            f"✅ Место {spot_number} добавлено!\nВаши места: {spots_text}"
+            f"✅ Место {spot_number} добавлено!\nВаши места: {spots_text}",
+            reply_markup=main_menu_keyboard(),
         )
     elif existing_owners:
         # Spot is taken — send conflict to staff
@@ -705,7 +826,8 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_moderator:
                 logger.error(f"Failed to notify admin {admin_id}: {e}")
         await message.answer(
             f"Место {spot_number} занято ({owners_text}). "
-            f"Запрос отправлен администрации для решения."
+            f"Запрос отправлен администрации для решения.",
+            reply_markup=main_menu_keyboard(),
         )
     else:
         # Regular user, free spot — needs staff approval
@@ -735,7 +857,8 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_moderator:
             except Exception as e:
                 logger.error(f"Failed to notify admin {admin_id}: {e}")
         await message.answer(
-            f"Запрос на место {spot_number} отправлен администратору. Ожидайте."
+            f"Запрос на место {spot_number} отправлен администратору. Ожидайте.",
+            reply_markup=main_menu_keyboard(),
         )
 
     await state.clear()
@@ -743,7 +866,7 @@ async def add_spot_number(message: Message, state: FSMContext, db, is_moderator:
 
 # === Remove spot (for approved users) ===
 
-@router.message(F.text == MENU_BUTTONS["remove_spot"])
+@router.message(F.text == MENU_BUTTONS["remove_spot"], F.chat.type == "private")
 async def remove_spot_start(message: Message, state: FSMContext, db, is_approved: bool, **kwargs):
     if not is_approved:
         await message.answer("Вы не зарегистрированы. Используйте /start")
@@ -757,7 +880,8 @@ async def remove_spot_start(message: Message, state: FSMContext, db, is_approved
     spots_text = ", ".join(str(s["spot_number"]) for s in spots)
     await message.answer(
         f"Ваши места: {spots_text}\n\n"
-        f"Введите номер места, которое хотите удалить:"
+        f"Введите номер места, которое хотите удалить:",
+        reply_markup=cancel_keyboard(),
     )
     await state.set_state(RemoveSpotState.waiting_for_spot)
 
@@ -766,7 +890,10 @@ async def remove_spot_start(message: Message, state: FSMContext, db, is_approved
 async def remove_spot_number(message: Message, state: FSMContext, db, **kwargs):
     text = message.text.strip()
     if not text.isdigit():
-        await message.answer("Введите номер места как число:")
+        await message.answer(
+            "Введите номер места как число:",
+            reply_markup=cancel_keyboard(),
+        )
         return
 
     spot_number = int(text)
@@ -775,16 +902,22 @@ async def remove_spot_number(message: Message, state: FSMContext, db, **kwargs):
     if removed:
         spots = await db.get_user_spots(message.from_user.id)
         spots_text = ", ".join(str(s["spot_number"]) for s in spots) if spots else "нет мест"
-        await message.answer(f"✅ Место {spot_number} удалено.\nВаши места: {spots_text}")
+        await message.answer(
+            f"✅ Место {spot_number} удалено.\nВаши места: {spots_text}",
+            reply_markup=main_menu_keyboard(),
+        )
     else:
-        await message.answer(f"Место {spot_number} не принадлежит вам.")
+        await message.answer(
+            f"Место {spot_number} не принадлежит вам.",
+            reply_markup=main_menu_keyboard(),
+        )
 
     await state.clear()
 
 
 # === Admin: manage spots for any user ===
 
-@router.message(Command("spot"))
+@router.message(Command("spot"), F.chat.type == "private")
 async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: bool, **kwargs):
     """Staff command: /spot add/remove/info/force"""
     if not is_moderator:
@@ -893,7 +1026,7 @@ async def cmd_admin_spot(message: Message, state: FSMContext, db, is_moderator: 
 
 # === Admin: manage moderators ===
 
-@router.message(Command("mod"))
+@router.message(Command("mod"), F.chat.type == "private")
 async def cmd_mod(message: Message, db, is_admin: bool, **kwargs):
     """/mod add <user_id>, /mod remove <user_id>, /mod list"""
     if not is_admin:
@@ -936,7 +1069,6 @@ async def cmd_mod(message: Message, db, is_admin: bool, **kwargs):
         added = await db.add_moderator(mod_id)
         if added:
             await message.answer(f"✅ Модератор <code>{mod_id}</code> добавлен.", parse_mode="HTML")
-            # Уведомить нового модератора
             try:
                 bot: Bot = message.bot
                 await bot.send_message(
@@ -961,7 +1093,6 @@ async def cmd_mod(message: Message, db, is_admin: bool, **kwargs):
         removed = await db.remove_moderator(mod_id)
         if removed:
             await message.answer(f"✅ Модератор <code>{mod_id}</code> снят.", parse_mode="HTML")
-            # Уведомить бывшего модератора
             try:
                 bot: Bot = message.bot
                 await bot.send_message(mod_id, "ℹ️ Ваши права модератора были сняты.")

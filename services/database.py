@@ -104,6 +104,27 @@ class Database:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+
+    # === Bot Settings ===
+
+    async def get_setting(self, key: str):
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT value FROM bot_settings WHERE key = $1", key)
+            return row["value"] if row else None
+
+    async def set_setting(self, key: str, value: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO bot_settings (key, value) VALUES ($1, $2) "
+                "ON CONFLICT (key) DO UPDATE SET value = $2",
+                key, value,
+            )
 
     # === Moderators ===
 

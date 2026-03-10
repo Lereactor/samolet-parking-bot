@@ -1,6 +1,6 @@
 import logging
 
-from aiogram import Router, Bot
+from aiogram import Router, Bot, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -14,7 +14,7 @@ class AnnounceState(StatesGroup):
     waiting_for_text = State()
 
 
-@router.message(Command("announce"))
+@router.message(Command("announce"), F.chat.type == "private")
 async def cmd_announce(message: Message, state: FSMContext, is_moderator: bool, **kwargs):
     if not is_moderator:
         return
