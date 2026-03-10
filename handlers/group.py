@@ -27,6 +27,22 @@ async def handle_group_message(message: Message, db, **kwargs):
         if bot_mention not in message.text.lower():
             return
 
+        # Only registered approved users can send notifications
+        if not message.from_user:
+            return
+        sender = await db.get_user(message.from_user.id)
+        if not sender or sender["status"] != "approved":
+            await message.reply("⛔ Уведомления могут отправлять только зарегистрированные жители.")
+            return
+
+        # Get sender's spots for signature
+        sender_spots = await db.get_user_spots(sender["telegram_id"])
+        if sender_spots:
+            spot_numbers_str = ", ".join(str(s["spot_number"]) for s in sender_spots)
+            sender_label = f"Место {spot_numbers_str}"
+        else:
+            sender_label = sender["name"] or "Житель"
+
         # Remove mention, find spot number
         clean = message.text.lower().replace(bot_mention, "").strip()
         numbers = re.findall(r"\b(\d{1,4})\b", clean)
@@ -51,13 +67,9 @@ async def handle_group_message(message: Message, db, **kwargs):
             message_text = "Обращение по поводу вашего места"
 
         # Log
-        if message.from_user:
-            sender = await db.get_user(message.from_user.id)
-            if sender:
-                await db.add_message(message.from_user.id, spot_number, message_text, SOURCE_GROUP)
+        await db.add_message(message.from_user.id, spot_number, message_text, SOURCE_GROUP)
 
         # DM all owners
-        sender_name = message.from_user.full_name if message.from_user else "Кто-то"
         sent = 0
         for owner in owners:
             try:
@@ -66,7 +78,7 @@ async def handle_group_message(message: Message, db, **kwargs):
                     f"💬 <b>Сообщение из группы</b>\n\n"
                     f"По поводу места <b>{spot_number}</b>:\n"
                     f"«{message_text}»\n\n"
-                    f"От: {sender_name}",
+                    f"От: {sender_label}",
                     parse_mode="HTML",
                 )
                 sent += 1
