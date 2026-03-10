@@ -35,16 +35,18 @@ async def handle_group_message(message: Message, db, **kwargs):
             await message.reply("⛔ Уведомления могут отправлять только зарегистрированные жители.")
             return
 
-        # Get sender's spots for signature
+        # Get sender's spots for signature (no usernames — only spot numbers)
         sender_spots = await db.get_user_spots(sender["telegram_id"])
         if sender_spots:
             spot_numbers_str = ", ".join(str(s["spot_number"]) for s in sender_spots)
             sender_label = f"Место {spot_numbers_str}"
+            reply_spot = sender_spots[0]["spot_number"]
         else:
-            sender_label = sender["name"] or "Житель"
+            sender_label = "Житель"
+            reply_spot = None
 
-        # Remove mention, find spot number
-        clean = message.text.lower().replace(bot_mention, "").strip()
+        # Remove mention (case-insensitive), find spot number; preserve original case
+        clean = re.sub(re.escape(bot_mention), "", message.text, flags=re.IGNORECASE).strip()
         numbers = re.findall(r"\b(\d{1,4})\b", clean)
 
         if not numbers:
@@ -70,6 +72,10 @@ async def handle_group_message(message: Message, db, **kwargs):
         await db.add_message(message.from_user.id, spot_number, message_text, SOURCE_GROUP)
 
         # DM all owners
+        reply_hint = (
+            f"\n\n💡 Ответить: напишите в группе <code>@{bot_info.username} {reply_spot} ваш текст</code>"
+            if reply_spot else ""
+        )
         sent = 0
         for owner in owners:
             try:
@@ -78,7 +84,8 @@ async def handle_group_message(message: Message, db, **kwargs):
                     f"💬 <b>Сообщение из группы</b>\n\n"
                     f"По поводу места <b>{spot_number}</b>:\n"
                     f"«{message_text}»\n\n"
-                    f"От: {sender_label}",
+                    f"От: {sender_label}"
+                    f"{reply_hint}",
                     parse_mode="HTML",
                 )
                 sent += 1
