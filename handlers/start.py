@@ -516,30 +516,29 @@ async def cmd_users(message: Message, db, is_admin: bool, **kwargs):
     if message.chat.type != "private" or not is_admin:
         return
 
-    import html as html_module
-    users = await db.get_all_users()
-    if not users:
-        await message.answer("Пользователей нет.")
-        return
+    try:
+        import html as _html
+        users = await db.get_all_users()
+        if not users:
+            await message.answer("Пользователей нет.")
+            return
 
-    status_icon = {
-        "approved": "✅", "pending": "⏳", "rejected": "❌", "banned": "🚫"
-    }
-    lines = ["<b>Пользователи:</b>\n"]
-    for u in users:
-        spots = await db.get_user_spots(u["telegram_id"])
-        spot_nums = ", ".join(str(s["spot_number"]) for s in spots) if spots else "—"
-        icon = status_icon.get(u["status"], "❓")
-        name = html_module.escape(u["name"] or "—")
-        username = html_module.escape(u["username"] or "—")
-        lines.append(
-            f"{icon} {name} | Места: {spot_nums} | @{username} | <code>{u['telegram_id']}</code>"
-        )
+        status_icon = {"approved": "✅", "pending": "⏳", "rejected": "❌", "banned": "🚫"}
+        lines = ["<b>Пользователи:</b>\n"]
+        for u in users:
+            spots = await db.get_user_spots(u["telegram_id"])
+            spot_nums = ", ".join(str(s["spot_number"]) for s in spots) if spots else "—"
+            icon = status_icon.get(u["status"], "❓")
+            name = _html.escape(str(u["name"] or "—"))
+            username = _html.escape(str(u["username"] or "—"))
+            lines.append(f"{icon} {name} | {spot_nums} | @{username} | <code>{u['telegram_id']}</code>")
 
-    # Split into chunks of max 4000 chars to avoid Telegram limit
-    text = "\n".join(lines)
-    for i in range(0, len(text), 4000):
-        await message.answer(text[i:i+4000], parse_mode="HTML")
+        text = "\n".join(lines)
+        for i in range(0, len(text), 4000):
+            await message.answer(text[i:i + 4000], parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"cmd_users error: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка: {e}")
 
 
 @router.message(Command("approve"))
