@@ -57,12 +57,12 @@ async def run_web_server():
 # === Auto-backup ===
 
 async def auto_backup_loop(bot: Bot, db: Database):
-    """Export full DB every 30 days and send to admin."""
+    """Export full DB every 7 days and send to admin."""
     from config import ADMIN_ID
     from aiogram.types import BufferedInputFile
 
     while True:
-        await asyncio.sleep(30 * 24 * 60 * 60)  # 30 days
+        await asyncio.sleep(7 * 24 * 60 * 60)  # 7 days
         if not ADMIN_ID:
             continue
         try:
@@ -71,7 +71,7 @@ async def auto_backup_loop(bot: Bot, db: Database):
                 data.encode("utf-8"), filename="parking_auto_backup.json"
             )
             try:
-                await bot.send_document(ADMIN_ID, file, caption="📦 Автоматический бэкап (30 дней)")
+                await bot.send_document(ADMIN_ID, file, caption="📦 Автоматический бэкап (7 дней)")
             except Exception as e:
                 logger.error(f"Auto-backup to {ADMIN_ID} failed: {e}")
             logger.info("Auto-backup sent to admin")
