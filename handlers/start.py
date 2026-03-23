@@ -533,9 +533,18 @@ async def cmd_users(message: Message, db, is_admin: bool, **kwargs):
             username = _html.escape(str(u["username"] or "—"))
             lines.append(f"{icon} {name} | {spot_nums} | @{username} | <code>{u['telegram_id']}</code>")
 
-        text = "\n".join(lines)
-        for i in range(0, len(text), 4000):
-            await message.answer(text[i:i + 4000], parse_mode="HTML")
+        chunks = []
+        current = ""
+        for line in lines:
+            if len(current) + len(line) + 1 > 4000:
+                chunks.append(current)
+                current = line
+            else:
+                current = current + "\n" + line if current else line
+        if current:
+            chunks.append(current)
+        for chunk in chunks:
+            await message.answer(chunk, parse_mode="HTML")
     except Exception as e:
         logger.error(f"cmd_users error: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка: {e}")
