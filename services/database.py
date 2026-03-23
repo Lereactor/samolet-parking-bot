@@ -503,6 +503,14 @@ class Database:
     async def import_all_data(self, json_str: str) -> dict:
         data = json.loads(json_str)
         counts = {}
+
+        def parse_dt(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return datetime.fromisoformat(value)
+            return value
+
         async with self.pool.acquire() as conn:
             # Users
             for u in data.get("users", []):
@@ -512,7 +520,7 @@ class Database:
                        ON CONFLICT (telegram_id) DO UPDATE
                        SET username = $2, name = $3, status = $4""",
                     u["telegram_id"], u.get("username"), u["name"],
-                    u["status"], u["created_at"],
+                    u["status"], parse_dt(u["created_at"]),
                 )
             counts["users"] = len(data.get("users", []))
 
@@ -524,7 +532,7 @@ class Database:
                        ON CONFLICT (spot_number, user_id) DO UPDATE
                        SET is_temporary_free = $3, free_until = $4""",
                     s["spot_number"], s["user_id"], s["is_temporary_free"],
-                    s.get("free_until"), s["created_at"],
+                    parse_dt(s.get("free_until")), parse_dt(s["created_at"]),
                 )
             counts["parking_spots"] = len(data.get("parking_spots", []))
 
@@ -535,7 +543,7 @@ class Database:
                        VALUES ($1, $2, $3, $4, $5, $6)
                        ON CONFLICT DO NOTHING""",
                     m.get("from_user_id"), m["to_spot"], m["message_text"],
-                    m.get("reply_text"), m["source"], m["created_at"],
+                    m.get("reply_text"), m["source"], parse_dt(m["created_at"]),
                 )
             counts["messages"] = len(data.get("messages", []))
 
@@ -546,7 +554,7 @@ class Database:
                        VALUES ($1, $2, $3, $4, $5, $6)
                        ON CONFLICT DO NOTHING""",
                     g["host_user_id"], g["guest_info"], g.get("spot_number"),
-                    g["expires_at"], g["is_active"], g["created_at"],
+                    parse_dt(g["expires_at"]), g["is_active"], parse_dt(g["created_at"]),
                 )
             counts["guest_passes"] = len(data.get("guest_passes", []))
 
@@ -556,7 +564,7 @@ class Database:
                     """INSERT INTO announcements (admin_id, text, created_at)
                        VALUES ($1, $2, $3)
                        ON CONFLICT DO NOTHING""",
-                    a["admin_id"], a["text"], a["created_at"],
+                    a["admin_id"], a["text"], parse_dt(a["created_at"]),
                 )
             counts["announcements"] = len(data.get("announcements", []))
 
@@ -574,8 +582,8 @@ class Database:
                     """INSERT INTO reminders (user_id, spot_number, remind_at, is_sent, created_at)
                        VALUES ($1, $2, $3, $4, $5)
                        ON CONFLICT DO NOTHING""",
-                    r["user_id"], r["spot_number"], r["remind_at"],
-                    r["is_sent"], r["created_at"],
+                    r["user_id"], r["spot_number"], parse_dt(r["remind_at"]),
+                    r["is_sent"], parse_dt(r["created_at"]),
                 )
             counts["reminders"] = len(data.get("reminders", []))
 
