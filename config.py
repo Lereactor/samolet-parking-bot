@@ -15,7 +15,7 @@ RATE_LIMIT_MESSAGES = 10
 RATE_LIMIT_PERIOD = 60  # seconds
 
 # Bot version — bump to broadcast updated menu to all users on next deploy
-BOT_VERSION = "2.2"
+BOT_VERSION = "2.3"
 
 # Cancel button text (used in FSM dialogs)
 CANCEL_TEXT = "❌ Отмена"
@@ -26,9 +26,11 @@ MENU_BUTTONS = {
     "directory": "📋 Справочник мест",
     "my_spot": "📍 Моё место",
     "history": "📨 История сообщений",
+    "find_free": "🔍 Найти свободное",
     "reminder": "⏰ Напомнить об оплате",
     "add_spot": "➕ Добавить место",
     "remove_spot": "➖ Удалить место",
+    "report": "🚨 Пожаловаться",
     "contact_uk": "📞 Связь с УК",
     "help": "❓ Помощь",
 }
@@ -43,3 +45,4 @@ STATUS_BANNED = "banned"
 SOURCE_GROUP = "group"
 SOURCE_PRIVATE = "private"
 SOURCE_NOTIFY = "notify"
+SOURCE_REPORT = "report"

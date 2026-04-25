@@ -111,6 +111,36 @@ class Database:
                 )
             """)
 
+            # Indexes for hot queries (idempotent — CREATE INDEX IF NOT EXISTS)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_to_spot_created "
+                "ON messages (to_spot, created_at DESC)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_from_user "
+                "ON messages (from_user_id)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_parking_spots_user "
+                "ON parking_spots (user_id)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_parking_spots_number "
+                "ON parking_spots (spot_number)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reminders_pending "
+                "ON reminders (is_sent, remind_at) WHERE is_sent = FALSE"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_guest_passes_host_active "
+                "ON guest_passes (host_user_id, is_active)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_users_status "
+                "ON users (status)"
+            )
+
     # === Bot Settings ===
 
     async def get_setting(self, key: str):
@@ -409,6 +439,16 @@ class Database:
                 host_user_id,
             )
 
+    async def get_all_active_guest_passes(self):
+        """All active guest passes across users (for /map)."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """SELECT gp.*, u.name as host_name FROM guest_passes gp
+                   JOIN users u ON gp.host_user_id = u.telegram_id
+                   WHERE gp.is_active = TRUE AND gp.expires_at > NOW()
+                   ORDER BY gp.spot_number, gp.expires_at"""
+            )
+
     async def deactivate_expired_passes(self) -> int:
         async with self.pool.acquire() as conn:
             result = await conn.execute(
@@ -435,6 +475,42 @@ class Database:
                 "SELECT * FROM announcements ORDER BY created_at DESC LIMIT $1",
                 limit,
             )
+
+    # === Personal Stats (for "Моё место") ===
+
+    async def get_user_personal_stats(self, user_id: int, days: int = 30) -> dict:
+        """Per-user counters: messages received on their spots, last message, active reminders/guests."""
+        async with self.pool.acquire() as conn:
+            messages_received = await conn.fetchval(
+                """SELECT COUNT(*) FROM messages
+                   WHERE to_spot IN (SELECT spot_number FROM parking_spots WHERE user_id = $1)
+                   AND created_at > NOW() - ($2 || ' days')::interval""",
+                user_id, str(days),
+            )
+            last_message = await conn.fetchrow(
+                """SELECT m.created_at, m.message_text, m.to_spot, u.name as from_name
+                   FROM messages m
+                   LEFT JOIN users u ON m.from_user_id = u.telegram_id
+                   WHERE m.to_spot IN (SELECT spot_number FROM parking_spots WHERE user_id = $1)
+                   ORDER BY m.created_at DESC LIMIT 1""",
+                user_id,
+            )
+            active_reminders = await conn.fetchval(
+                "SELECT COUNT(*) FROM reminders WHERE user_id = $1 AND is_sent = FALSE",
+                user_id,
+            )
+            active_guests = await conn.fetchval(
+                """SELECT COUNT(*) FROM guest_passes
+                   WHERE host_user_id = $1 AND is_active = TRUE AND expires_at > NOW()""",
+                user_id,
+            )
+            return {
+                "messages_received": messages_received or 0,
+                "last_message": dict(last_message) if last_message else None,
+                "active_reminders": active_reminders or 0,
+                "active_guests": active_guests or 0,
+                "days": days,
+            }
 
     # === Stats ===
 

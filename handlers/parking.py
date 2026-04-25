@@ -2,9 +2,10 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from aiogram import Router, F, Bot
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 
 from config import MENU_BUTTONS, SOURCE_NOTIFY, CANCEL_TEXT
 
@@ -46,9 +47,11 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
              KeyboardButton(text=MENU_BUTTONS["directory"])],
             [KeyboardButton(text=MENU_BUTTONS["my_spot"]),
              KeyboardButton(text=MENU_BUTTONS["history"])],
-            [KeyboardButton(text=MENU_BUTTONS["reminder"]),
-             KeyboardButton(text=MENU_BUTTONS["add_spot"])],
-            [KeyboardButton(text=MENU_BUTTONS["remove_spot"]),
+            [KeyboardButton(text=MENU_BUTTONS["find_free"]),
+             KeyboardButton(text=MENU_BUTTONS["reminder"])],
+            [KeyboardButton(text=MENU_BUTTONS["add_spot"]),
+             KeyboardButton(text=MENU_BUTTONS["remove_spot"])],
+            [KeyboardButton(text=MENU_BUTTONS["report"]),
              KeyboardButton(text=MENU_BUTTONS["contact_uk"])],
             [KeyboardButton(text=MENU_BUTTONS["help"])],
         ],
@@ -70,15 +73,40 @@ async def my_spot(message: Message, db, is_approved: bool, **kwargs):
         return
 
     lines = ["<b>📍 Ваши места:</b>\n"]
+    msk_tz = timezone(timedelta(hours=3))
     for s in spots:
-        # Check co-owners
         owners = await db.get_spot_owners(s["spot_number"])
         co_owners = [o for o in owners if o["telegram_id"] != message.from_user.id]
         co_info = ""
         if co_owners:
             co_names = ", ".join(o["name"] for o in co_owners)
             co_info = f" (совладельцы: {co_names})"
-        lines.append(f"Место <b>{s['spot_number']}</b>{co_info}")
+        free_info = ""
+        if s["is_temporary_free"]:
+            if s["free_until"]:
+                free_until_msk = s["free_until"].astimezone(msk_tz)
+                free_info = f" — 🟢 свободно до {free_until_msk.strftime('%d.%m %H:%M')} МСК"
+            else:
+                free_info = " — 🟢 свободно (без срока)"
+        lines.append(f"Место <b>{s['spot_number']}</b>{co_info}{free_info}")
+
+    stats = await db.get_user_personal_stats(message.from_user.id, days=30)
+    lines.append("")
+    lines.append("📊 <b>Статистика за 30 дней</b>")
+    lines.append(f"  ✉️ Сообщений по вашим местам: <b>{stats['messages_received']}</b>")
+    if stats["last_message"]:
+        lm = stats["last_message"]
+        lm_date = lm["created_at"].astimezone(msk_tz).strftime("%d.%m %H:%M")
+        from_name = lm.get("from_name") or "Неизвестный"
+        preview = (lm["message_text"] or "")[:60]
+        if len(lm["message_text"] or "") > 60:
+            preview += "…"
+        lines.append(f"  📨 Последнее: {lm_date} от {from_name} (место {lm['to_spot']})")
+        lines.append(f"     «{preview}»")
+    if stats["active_reminders"]:
+        lines.append(f"  ⏰ Активных напоминаний: <b>{stats['active_reminders']}</b>")
+    if stats["active_guests"]:
+        lines.append(f"  👥 Активных гостевых пропусков: <b>{stats['active_guests']}</b>")
 
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=main_menu_keyboard())
 
@@ -452,6 +480,225 @@ async def directory_lookup(message: Message, state: FSMContext, db, **kwargs):
     await state.clear()
 
 
+# === Find free spot ===
+
+@router.message(F.text == MENU_BUTTONS["find_free"], F.chat.type == "private")
+async def find_free(message: Message, db, is_approved: bool, **kwargs):
+    if not is_approved:
+        await message.answer("Вы не зарегистрированы. Используйте /start")
+        return
+
+    free_spots = await db.get_free_spots()
+    msk_tz = timezone(timedelta(hours=3))
+    now_utc = datetime.now(timezone.utc)
+    actual = [s for s in free_spots if not s["free_until"] or s["free_until"] > now_utc]
+
+    if not actual:
+        await message.answer(
+            "🔍 <b>Свободных мест сейчас нет.</b>\n\n"
+            "Когда кто-то из жильцов отметит своё место как временно свободное, "
+            "оно появится здесь.",
+            parse_mode="HTML",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    lines = [f"🔍 <b>Свободные места ({len(actual)}):</b>\n"]
+    for s in actual:
+        if s["free_until"]:
+            until_msk = s["free_until"].astimezone(msk_tz)
+            lines.append(
+                f"🟢 Место <b>{s['spot_number']}</b> — до {until_msk.strftime('%d.%m %H:%M')} МСК "
+                f"(владелец: {s['name']})"
+            )
+        else:
+            lines.append(
+                f"🟢 Место <b>{s['spot_number']}</b> — без срока "
+                f"(владелец: {s['name']})"
+            )
+    lines.append("")
+    lines.append("💡 Чтобы договориться — нажмите «✉️ Сообщить А/М» и укажите номер места.")
+
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=main_menu_keyboard())
+
+
+# === /map command — parking snapshot ===
+
+@router.message(Command("map"))
+async def cmd_map(message: Message, db, is_approved: bool, **kwargs):
+    if message.chat.type != "private" or not is_approved:
+        return
+
+    all_spots_rows = await db.get_all_spots()
+    free_spots = await db.get_free_spots()
+    active_passes = await db.get_all_active_guest_passes()
+
+    msk_tz = timezone(timedelta(hours=3))
+    now_utc = datetime.now(timezone.utc)
+
+    unique_spots = sorted(set(s["spot_number"] for s in all_spots_rows))
+    actual_free = [s for s in free_spots if not s["free_until"] or s["free_until"] > now_utc]
+
+    lines = [
+        "🗺 <b>Карта парковки</b>\n",
+        f"Всего зарегистрировано мест: <b>{len(unique_spots)}</b>\n",
+    ]
+
+    if actual_free:
+        lines.append(f"🟢 <b>Свободные сейчас ({len(actual_free)}):</b>")
+        for s in actual_free:
+            if s["free_until"]:
+                until_msk = s["free_until"].astimezone(msk_tz)
+                lines.append(f"  • {s['spot_number']} — до {until_msk.strftime('%d.%m %H:%M')}")
+            else:
+                lines.append(f"  • {s['spot_number']} — без срока")
+        lines.append("")
+    else:
+        lines.append("🟢 Свободных сейчас нет.\n")
+
+    if active_passes:
+        lines.append(f"👥 <b>С гостями ({len(active_passes)}):</b>")
+        for p in active_passes:
+            until_msk = p["expires_at"].astimezone(msk_tz)
+            spot_str = str(p["spot_number"]) if p["spot_number"] else "—"
+            lines.append(
+                f"  • Место {spot_str} — {p['guest_info'][:30]} "
+                f"(хост: {p['host_name']}, до {until_msk.strftime('%d.%m %H:%M')})"
+            )
+        lines.append("")
+
+    if unique_spots:
+        spots_str = ", ".join(str(n) for n in unique_spots)
+        if len(spots_str) > 1500:
+            spots_str = spots_str[:1500] + "…"
+        lines.append(f"📋 Все места: {spots_str}")
+
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=main_menu_keyboard())
+
+
+# === Report (Жалоба) ===
+
+class ReportState(StatesGroup):
+    selecting_type = State()
+    waiting_for_content = State()
+
+
+REPORT_TYPES = {
+    "rep_violation": "🚗 Нарушение парковки",
+    "rep_unknown_car": "❓ Чужая машина",
+    "rep_garbage": "🗑 Мусор/состояние",
+    "rep_other": "📝 Другое",
+}
+
+
+def _report_type_keyboard():
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=key)]
+        for key, label in REPORT_TYPES.items()
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.message(F.text == MENU_BUTTONS["report"], F.chat.type == "private")
+async def report_start(message: Message, state: FSMContext, is_approved: bool, **kwargs):
+    if not is_approved:
+        await message.answer("Вы не зарегистрированы. Используйте /start")
+        return
+
+    await message.answer(
+        "🚨 <b>Пожаловаться</b>\n\n"
+        "Выберите тип:",
+        parse_mode="HTML",
+        reply_markup=_report_type_keyboard(),
+    )
+    await state.set_state(ReportState.selecting_type)
+
+
+@router.callback_query(ReportState.selecting_type, F.data.startswith("rep_"))
+async def report_type_selected(callback: CallbackQuery, state: FSMContext, **kwargs):
+    rep_type = callback.data
+    if rep_type not in REPORT_TYPES:
+        await callback.answer("Неверный тип", show_alert=True)
+        return
+
+    await state.update_data(report_type=rep_type, report_label=REPORT_TYPES[rep_type])
+    await callback.message.edit_text(
+        f"🚨 <b>{REPORT_TYPES[rep_type]}</b>\n\n"
+        f"Опишите ситуацию (можно приложить фото вместо текста или с подписью). "
+        f"Если есть номер места — укажите.",
+        parse_mode="HTML",
+    )
+    await state.set_state(ReportState.waiting_for_content)
+    await callback.answer()
+
+
+@router.message(ReportState.waiting_for_content, F.photo)
+async def report_with_photo(message: Message, state: FSMContext, db, **kwargs):
+    text = (message.caption or "").strip()
+    photo_id = message.photo[-1].file_id
+    await _deliver_report(message, state, db, text, photo_id)
+
+
+@router.message(ReportState.waiting_for_content, F.text)
+async def report_text_only(message: Message, state: FSMContext, db, **kwargs):
+    text = message.text.strip()
+    if len(text) < 5:
+        await message.answer(
+            "Описание слишком короткое. Минимум 5 символов:",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await _deliver_report(message, state, db, text, None)
+
+
+async def _deliver_report(message: Message, state: FSMContext, db, text: str, photo_id: str | None):
+    data = await state.get_data()
+    rep_label = data.get("report_label", "Жалоба")
+
+    sender_spots = await db.get_user_spots(message.from_user.id)
+    sender_spot_text = ", ".join(str(s["spot_number"]) for s in sender_spots) if sender_spots else "нет"
+    username = f"@{message.from_user.username}" if message.from_user.username else "—"
+
+    header = (
+        f"🚨 <b>{rep_label}</b>\n\n"
+        f"От: {message.from_user.full_name} ({username})\n"
+        f"Места отправителя: {sender_spot_text}\n"
+        f"ID: <code>{message.from_user.id}</code>\n"
+        f"━━━━━━━━━━━━━━━\n"
+    )
+    body = text if text else "<i>(без описания)</i>"
+
+    bot: Bot = message.bot
+    staff_ids = await db.get_staff_ids()
+    delivered = 0
+    for sid in staff_ids:
+        try:
+            if photo_id:
+                await bot.send_photo(
+                    sid, photo_id,
+                    caption=header + body,
+                    parse_mode="HTML",
+                )
+            else:
+                await bot.send_message(sid, header + body, parse_mode="HTML")
+            delivered += 1
+        except Exception as e:
+            logger.warning(f"Report delivery to staff {sid} failed: {e}")
+
+    if delivered:
+        await message.answer(
+            f"✅ Жалоба отправлена администрации ({delivered} получили).",
+            reply_markup=main_menu_keyboard(),
+        )
+    else:
+        await message.answer(
+            "⚠️ Не удалось отправить жалобу — попробуйте позже.",
+            reply_markup=main_menu_keyboard(),
+        )
+    await state.clear()
+
+
 # === Contact UK ===
 
 @router.message(F.text == MENU_BUTTONS["contact_uk"], F.chat.type == "private")
@@ -489,10 +736,15 @@ async def show_help(message: Message, db, is_approved: bool, is_admin: bool, is_
         "проверить статус конкретного места.\n\n"
 
         f"<b>{MENU_BUTTONS['my_spot']}</b>\n"
-        "Покажет все ваши места и совладельцев.\n\n"
+        "Покажет все ваши места, совладельцев и личную статистику "
+        "(сообщения за 30 дней, последнее сообщение, активные напоминания и гости).\n\n"
 
         f"<b>{MENU_BUTTONS['history']}</b>\n"
         "Просмотреть последние сообщения по вашим местам.\n\n"
+
+        f"<b>{MENU_BUTTONS['find_free']}</b>\n"
+        "Список мест, временно отмеченных владельцами как свободные. "
+        "Удобно, когда нужно припарковаться, а своего места нет.\n\n"
 
         f"<b>{MENU_BUTTONS['reminder']}</b>\n"
         "Установить напоминание об оплате парковки. Укажите дату и время "
@@ -504,8 +756,15 @@ async def show_help(message: Message, db, is_approved: bool, is_admin: bool, is_
         f"<b>{MENU_BUTTONS['remove_spot']}</b>\n"
         "Удалить одно из ваших мест.\n\n"
 
+        f"<b>{MENU_BUTTONS['report']}</b>\n"
+        "Отправить жалобу администрации (нарушение, чужая машина, мусор и т.д.). "
+        "Можно приложить фото.\n\n"
+
         f"<b>{MENU_BUTTONS['contact_uk']}</b>\n"
         f"Телефон управляющей компании: {UK_PHONE}\n\n"
+
+        "<b>Команды</b>\n"
+        "/map — снимок состояния парковки (свободные места и активные гости)\n\n"
 
         "<b>Использование в группе</b>\n"
         "Добавьте бота в чат вашего ЖК. Чтобы связаться с владельцем места, "
